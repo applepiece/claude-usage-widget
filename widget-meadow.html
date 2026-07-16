@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>Claude Usage</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%232C3A2F'/><rect x='3' y='9' width='10' height='4' fill='%237FB566'/><rect x='9' y='3' width='4' height='6' fill='%23568F4C'/><rect x='10' y='7' width='2' height='4' fill='%236E4B33'/></svg>">
+<style>
+  :root {
+    --paper: #F3E9D2;
+    --paper-2: #EADDBF;
+    --ink: #4A3F2E;
+    --ink-soft: #7C6E55;
+    --frame: #5B4B37;
+    --ok: #7AA85C;
+    --warn: #E0A24A;
+    --crit: #C75B4A;
+    --cell-empty: #DCCFAF;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #26301F;
+    display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans Thai", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+  .frame {
+    width: 360px;
+    background: var(--paper);
+    border: 4px solid var(--frame);
+    box-shadow: 0 0 0 2px #1B2317, 6px 8px 0 rgba(0,0,0,0.35);
+    image-rendering: pixelated;
+  }
+  canvas {
+    display: block;
+    width: 352px; height: 264px;
+    image-rendering: pixelated;
+    border-bottom: 4px solid var(--frame);
+  }
+  .panel { padding: 12px 14px 10px; }
+  .limit { margin-bottom: 12px; }
+  .row1 {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 5px;
+  }
+  .name { font-size: 13px; font-weight: 700; color: var(--ink); letter-spacing: 0.02em; }
+  .pct {
+    font-family: "Menlo", "Courier New", monospace;
+    font-size: 17px; font-weight: 700; color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  .bar {
+    display: grid;
+    grid-template-columns: repeat(20, 1fr);
+    gap: 2px;
+    height: 12px;
+    padding: 2px;
+    background: var(--frame);
+  }
+  .bar i { background: var(--cell-empty); }
+  .bar i.on { background: var(--ok); }
+  .bar.warn i.on { background: var(--warn); }
+  .bar.crit i.on { background: var(--crit); }
+  .reset {
+    margin-top: 5px;
+    font-size: 11.5px; color: var(--ink-soft);
+    display: flex; justify-content: space-between;
+    font-variant-numeric: tabular-nums;
+  }
+  .reset b { color: var(--ink); font-weight: 700; }
+  .foot {
+    display: flex; justify-content: space-between;
+    border-top: 2px dashed rgba(91,75,55,0.35);
+    padding-top: 7px;
+    font-size: 10.5px; color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
+  }
+  .err {
+    display: none;
+    margin: 0 0 10px;
+    font-size: 11px; color: #8C4A3E;
+    background: rgba(199,91,74,0.12);
+    border: 2px solid rgba(199,91,74,0.35);
+    padding: 5px 8px;
+  }
+  .err.show { display: block; }
+</style>
+</head>
+<body>
+<div class="frame">
+  <canvas id="scene" width="176" height="132"></canvas>
+  <div class="panel">
+    <div class="err" id="err">เชื่อมต่อไม่ได้ — จะลองใหม่อัตโนมัติ</div>
+
+    <div class="limit">
+      <div class="row1"><span class="name">รอบ 5 ชั่วโมง</span><span class="pct" id="pct5">–%</span></div>
+      <div class="bar" id="bar5"></div>
+      <div class="reset"><span>รีเซ็ต <b id="at5">–</b></span><span id="cd5">–</span></div>
+    </div>
+
+    <div class="limit">
+      <div class="row1"><span class="name">รายสัปดาห์ (ทุกโมเดล)</span><span class="pct" id="pct7">–%</span></div>
+      <div class="bar" id="bar7"></div>
+      <div class="reset"><span>รีเซ็ต <b id="at7">–</b></span><span id="cd7">–</span></div>
+    </div>
+
+    <div class="foot"><span id="stamp">กำลังโหลด…</span><span>Claude Max · ข้อมูลจริง</span></div>
+  </div>
+</div>
+
+<script>
+/* ============ state & data ============ */
+const state = { five: null, seven: null, fetchedAt: 0 };
+
+async function fetchUsage() {
+  try {
+    const r = await fetch('/api/usage');
+    if (!r.ok) throw new Error('bad status');
+    const d = await r.json();
+    state.five = d.five_hour;
+    state.seven = d.seven_day;
+    state.fetchedAt = Date.now();
+    document.getElementById('err').classList.remove('show');
+  } catch (e) {
+    document.getElementById('err').classList.add('show');
+  }
+  renderPanel();
+}
+
+/* ============ panel rendering ============ */
+const THAI_DAYS = ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'];
+const THAI_MONTHS = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+
+function fmtWhen(iso) {
+  const d = new Date(iso), now = new Date();
+  const hm = String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+  const tmr = new Date(now); tmr.setDate(now.getDate() + 1);
+  let day;
+  if (d.toDateString() === now.toDateString()) day = 'วันนี้';
+  else if (d.toDateString() === tmr.toDateString()) day = 'พรุ่งนี้';
+  else day = THAI_DAYS[d.getDay()] + ' ' + d.getDate() + ' ' + THAI_MONTHS[d.getMonth()];
+  return day + ' ' + hm + ' น.';
+}
+
+function fmtLeft(iso) {
+  let s = Math.floor((new Date(iso) - Date.now()) / 1000);
+  if (s <= 0) return 'กำลังรีเซ็ต…';
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  if (d > 0) return 'อีก ' + d + ' วัน ' + h + ' ชม.';
+  if (h > 0) return 'อีก ' + h + ' ชม. ' + m + ' นาที';
+  if (m > 0) return 'อีก ' + m + ' นาที';
+  return 'อีก <1 นาที';
+}
+
+function makeBar(el) {
+  for (let i = 0; i < 20; i++) el.appendChild(document.createElement('i'));
+}
+makeBar(document.getElementById('bar5'));
+makeBar(document.getElementById('bar7'));
+
+function paintLimit(info, pctEl, barEl, atEl, cdEl) {
+  if (!info) return;
+  const pct = Math.max(0, Math.min(100, info.utilization ?? 0));
+  document.getElementById(pctEl).textContent = Math.round(pct) + '%';
+  const bar = document.getElementById(barEl);
+  bar.className = 'bar' + (pct >= 90 ? ' crit' : pct >= 70 ? ' warn' : '');
+  const cells = bar.children, onCount = Math.round(pct / 5);
+  for (let i = 0; i < 20; i++) cells[i].className = i < onCount ? 'on' : '';
+  document.getElementById(atEl).textContent = fmtWhen(info.resets_at);
+  document.getElementById(cdEl).textContent = fmtLeft(info.resets_at);
+}
+
+function renderPanel() {
+  paintLimit(state.five, 'pct5', 'bar5', 'at5', 'cd5');
+  paintLimit(state.seven, 'pct7', 'bar7', 'at7', 'cd7');
+  if (state.fetchedAt) {
+    const t = new Date(state.fetchedAt);
+    document.getElementById('stamp').textContent =
+      'อัปเดต ' + String(t.getHours()).padStart(2,'0') + ':' + String(t.getMinutes()).padStart(2,'0') + ' น.';
+  }
+  // a limit that just lapsed → refetch soon
+  for (const info of [state.five, state.seven]) {
+    if (info && new Date(info.resets_at) < Date.now() && Date.now() - state.fetchedAt > 15000) {
+      fetchUsage();
+      break;
+    }
+  }
+}
+
+/* ============ pixel scene ============ */
+const W = 176, H = 132;
+const cv = document.getElementById('scene');
+const ctx = cv.getContext('2d');
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+const PAL = {
+  day: {
+    sky: ['#79B4D6', '#8FC4E2', '#A5D3E8', '#C6E6F2'],
+    cloud: '#FFFFFF', cloudShade: '#DCEEF6',
+    hillFar: '#9CC489', hill: '#74AB63', grass: '#7FB566', grassDark: '#699B54',
+    canopy: ['#3F6E3C', '#568F4C', '#6FAD5F'], trunk: '#6E4B33',
+    sunOuter: '#FFF3C4', sun: '#FFE9A8', flower: ['#FFFFFF', '#F7C8D8', '#FFE08A'],
+  },
+  sunset: {
+    sky: ['#C96A5E', '#E08A5E', '#F0A868', '#F8CE85'],
+    cloud: '#FFE0BC', cloudShade: '#EFBB90',
+    hillFar: '#A98F60', hill: '#7E8A4F', grass: '#8CA05A', grassDark: '#75894C',
+    canopy: ['#3C5E38', '#4F7C44', '#648F52'], trunk: '#5E4029',
+    sunOuter: '#FFD98F', sun: '#FFC15E', flower: ['#FFE9C9', '#F2B8A0', '#FFD98F'],
+  },
+  dusk: {
+    sky: ['#252B4A', '#333A63', '#454B77', '#655F8C'],
+    cloud: '#8B84A8', cloudShade: '#767098',
+    hillFar: '#41505A', hill: '#374F3E', grass: '#3E5C45', grassDark: '#33503A',
+    canopy: ['#22381F', '#2E4A2A', '#3A5C34'], trunk: '#3A2A1E',
+    sunOuter: '#F4F1E4', sun: '#E8E4D8', flower: ['#5A6B8C', '#5A6B8C', '#6B7BA0'],
+  },
+};
+
+function mood() {
+  const p = Math.max(state.five?.utilization ?? 0, state.seven?.utilization ?? 0);
+  return p >= 90 ? 'dusk' : p >= 70 ? 'sunset' : 'day';
+}
+
+function px(x, y, c) { ctx.fillStyle = c; ctx.fillRect(x | 0, y | 0, 1, 1); }
+function run(x, y, w, c) { ctx.fillStyle = c; ctx.fillRect(x | 0, y | 0, Math.max(1, w | 0), 1); }
+
+function ellipse(cx, cy, rx, ry, c) {
+  for (let dy = -ry; dy <= ry; dy++) {
+    const half = rx * Math.sqrt(Math.max(0, 1 - (dy / ry) * (dy / ry)));
+    run(cx - half, cy + dy, half * 2, c);
+  }
+}
+
+/* static layout (seeded once) */
+const R = mulberry32(20260716);
+const clouds = [];
+for (let i = 0; i < 4; i++) clouds.push({ x: R() * W, y: 6 + R() * 22, s: 12 + R() * 10, v: 1.6 + R() * 1.2, far: true });
+for (let i = 0; i < 3; i++) clouds.push({ x: R() * W, y: 10 + R() * 26, s: 16 + R() * 12, v: 3.2 + R() * 1.8, far: false });
+
+const GRASS_Y = 96;
+const tufts = [];
+for (let i = 0; i < 46; i++) tufts.push({ x: 3 + R() * (W - 6), y: GRASS_Y + 4 + R() * (H - GRASS_Y - 8), h: 2 + (R() * 2 | 0), ph: R() * 6.28 });
+const flowers = [];
+for (let i = 0; i < 18; i++) flowers.push({ x: 4 + R() * (W - 40), y: GRASS_Y + 5 + R() * (H - GRASS_Y - 9), k: R() * 3 | 0 });
+const stars = [];
+for (let i = 0; i < 26; i++) stars.push({ x: R() * W, y: R() * 52, ph: R() * 6.28 });
+
+/* canopy pixels precomputed with dithered shading */
+const canopyPix = [];
+(function () {
+  const blobs = [
+    { cx: 132, cy: 62, rx: 26, ry: 19 },
+    { cx: 116, cy: 74, rx: 15, ry: 11 },
+    { cx: 148, cy: 76, rx: 13, ry: 10 },
+    { cx: 124, cy: 50, rx: 12, ry: 9 },
+  ];
+  const seen = new Set();
+  const r2 = mulberry32(77);
+  for (const b of blobs) {
+    for (let dy = -b.ry; dy <= b.ry; dy++) {
+      const half = b.rx * Math.sqrt(Math.max(0, 1 - (dy / b.ry) * (dy / b.ry)));
+      for (let dx = -half; dx <= half; dx++) {
+        const x = (b.cx + dx) | 0, y = (b.cy + dy) | 0;
+        const key = x * 1000 + y;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        // light from upper-left, dithered
+        const lightness = 0.5 - dy / (b.ry * 2) - dx / (b.rx * 3) + (r2() - 0.5) * 0.55;
+        const idx = lightness > 0.62 ? 2 : lightness > 0.28 ? 1 : 0;
+        canopyPix.push([x, y, idx]);
+      }
+    }
+  }
+})();
+
+const soots = [];
+{
+  const r3 = mulberry32(555);
+  for (let i = 0; i < 10; i++) soots.push({ x: 10 + r3() * 88, y: GRASS_Y + 8 + r3() * 22, ph: r3() * 6.28, hop: r3() * 6.28 });
+}
+const petals = [];
+{
+  const r4 = mulberry32(999);
+  for (let i = 0; i < 6; i++) petals.push({ x: r4() * W, y: r4() * 70, ph: r4() * 6.28, v: 5 + r4() * 4 });
+}
+const flies = [];
+{
+  const r5 = mulberry32(313);
+  for (let i = 0; i < 9; i++) flies.push({ x: 60 + r5() * 100, y: 60 + r5() * 55, ph: r5() * 6.28 });
+}
+
+function drawCloud(c, p) {
+  const s = c.s;
+  ellipse(c.x, c.y, s * 0.55, s * 0.22, p.cloud);
+  ellipse(c.x - s * 0.3, c.y + s * 0.08, s * 0.32, s * 0.16, p.cloud);
+  ellipse(c.x + s * 0.32, c.y + s * 0.1, s * 0.3, s * 0.14, p.cloud);
+  run(c.x - s * 0.45, c.y + s * 0.2, s * 0.9, p.cloudShade);
+}
+
+function drawScene(t) {
+  const m = mood(), p = PAL[m];
+  const sess = state.five?.utilization ?? 0;
+
+  /* sky bands */
+  const bandH = Math.ceil(GRASS_Y / 4);
+  for (let i = 0; i < 4; i++) { ctx.fillStyle = p.sky[i]; ctx.fillRect(0, i * bandH, W, bandH); }
+
+  /* stars (dusk) */
+  if (m === 'dusk') for (const s of stars) {
+    if (Math.sin(t * 2 + s.ph) > -0.3) px(s.x, s.y, 'rgba(240,240,220,0.9)');
+  }
+
+  /* sun / moon */
+  if (m === 'day') { ellipse(26, 18, 7, 7, p.sunOuter); ellipse(26, 18, 5, 5, p.sun); }
+  else if (m === 'sunset') { ellipse(30, 62, 9, 9, p.sunOuter); ellipse(30, 62, 7, 7, p.sun); }
+  else { ellipse(26, 18, 6, 6, p.sun); ellipse(29, 16, 5, 5, p.sky[0]); }
+
+  /* clouds */
+  for (const c of clouds) {
+    c.x -= c.v * 0.016;
+    if (c.x < -c.s) { c.x = W + c.s; }
+    if (c.far) drawCloud(c, p);
+  }
+
+  /* far hills */
+  for (let x = 0; x < W; x++) {
+    const y = GRASS_Y - 18 + Math.sin(x * 0.05 + 1.2) * 5 - Math.cos(x * 0.023) * 4;
+    ctx.fillStyle = p.hillFar; ctx.fillRect(x, y | 0, 1, GRASS_Y - (y | 0));
+  }
+  for (let x = 0; x < W; x++) {
+    const y = GRASS_Y - 9 + Math.sin(x * 0.035 + 4.0) * 4;
+    ctx.fillStyle = p.hill; ctx.fillRect(x, y | 0, 1, GRASS_Y - (y | 0));
+  }
+
+  /* near clouds pass in front of hills for depth */
+  for (const c of clouds) if (!c.far) drawCloud(c, p);
+
+  /* meadow */
+  ctx.fillStyle = p.grass; ctx.fillRect(0, GRASS_Y, W, H - GRASS_Y);
+  const rg = mulberry32(42);
+  for (let i = 0; i < 130; i++) px(rg() * W, GRASS_Y + rg() * (H - GRASS_Y), p.grassDark);
+
+  /* tree */
+  ctx.fillStyle = p.trunk;
+  ctx.fillRect(128, 84, 6, 22);
+  ctx.fillRect(126, 100, 10, 6);
+  ctx.fillRect(124, 82, 4, 3); ctx.fillRect(134, 80, 4, 3);
+  for (const [x, y, i] of canopyPix) px(x, y, p.canopy[i]);
+  /* canopy sway highlight */
+  const sway = Math.sin(t * 1.4) > 0.4 ? 1 : 0;
+  if (sway) for (const [x, y, i] of canopyPix) if (i === 2 && (x + y) % 7 === 0) px(x + 1, y, p.canopy[1]);
+
+  /* flowers */
+  for (const f of flowers) px(f.x, f.y, p.flower[f.k]);
+
+  /* grass tufts sway */
+  for (const g of tufts) {
+    const lean = Math.round(Math.sin(t * 2 + g.ph) * 0.9);
+    ctx.fillStyle = p.grassDark;
+    ctx.fillRect(g.x | 0, (g.y - g.h) | 0, 1, g.h);
+    px(g.x + lean, g.y - g.h - 1, p.grassDark);
+  }
+
+  /* soot sprites — จำนวนตาม session usage (1 ตัว = 10%) */
+  const n = Math.min(10, Math.ceil(sess / 10));
+  for (let i = 0; i < n; i++) {
+    const s = soots[i];
+    const hop = Math.max(0, Math.sin(t * 2.4 + s.hop)) * 2.2;
+    const y = s.y - hop, x = s.x + Math.sin(t * 0.6 + s.ph) * 2;
+    ctx.fillStyle = '#241E19';
+    ctx.fillRect((x - 1) | 0, (y - 1) | 0, 3, 3);
+    px(x - 2, y, '#241E19'); px(x + 2, y, '#241E19');
+    px(x, y - 2, '#241E19'); px(x - 2, y - 2, '#241E19'); px(x + 2, y - 2, '#241E19');
+    px(x - 1, y - 1, '#F5F1E6'); px(x + 1, y - 1, '#F5F1E6');
+  }
+
+  /* drifting petals (day/sunset) */
+  if (m !== 'dusk') {
+    for (const q of petals) {
+      q.x -= q.v * 0.016; q.y += 0.35 * 0.6 + Math.sin(t * 2 + q.ph) * 0.08;
+      if (q.x < -2) { q.x = W + 2; q.y = Math.random() * 60; }
+      if (q.y > H - 4) q.y = 8;
+      px(q.x, q.y, m === 'day' ? '#F9DFE8' : '#FFE3C2');
+    }
+  } else {
+    /* fireflies */
+    for (const f of flies) {
+      const a = (Math.sin(t * 3 + f.ph) + 1) / 2;
+      if (a > 0.45) {
+        ctx.fillStyle = 'rgba(255,231,135,' + a.toFixed(2) + ')';
+        const fx = f.x + Math.sin(t * 0.8 + f.ph) * 5, fy = f.y + Math.cos(t * 0.6 + f.ph * 2) * 4;
+        ctx.fillRect(fx | 0, fy | 0, 1, 1);
+        if (a > 0.85) { px(fx - 1, fy, 'rgba(255,231,135,0.35)'); px(fx + 1, fy, 'rgba(255,231,135,0.35)'); }
+      }
+    }
+  }
+}
+
+let last = 0;
+function loop(ms) {
+  if (ms - last > 66) { last = ms; drawScene(ms / 1000); }  /* ~15fps pixel cadence */
+  requestAnimationFrame(loop);
+}
+
+/* ============ boot ============ */
+fetchUsage();
+setInterval(fetchUsage, 60000);
+setInterval(renderPanel, 1000);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

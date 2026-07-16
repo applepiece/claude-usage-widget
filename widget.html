@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Claude Usage</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='4' fill='%2317181A'/><circle cx='8' cy='8' r='5.5' fill='none' stroke='%23FF375F' stroke-width='2'/><circle cx='8' cy='8' r='2.5' fill='none' stroke='%2330D158' stroke-width='1.6'/></svg>">
+<style>
+  :root {
+    --bg: #17181A;
+    --text: #E8E4DA;
+    --dim: #8A877E;
+    --ring5: #FF375F;   /* outer — 5-hour */
+    --ring7: #30D158;   /* inner — weekly */
+    --warn: #FFD60A;
+    --crit: #FF453A;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "SF Mono", Menlo, "Courier New", monospace;
+    display: flex; align-items: center; justify-content: center;
+    user-select: none; overflow: hidden;
+  }
+  .widget { width: 240px; padding: 10px 18px 12px; }
+  .ringwrap { position: relative; width: 176px; height: 176px; margin: 0 auto; }
+  #rings { width: 176px; height: 176px; display: block; }
+  #pet {
+    position: absolute; left: 50%; top: 50%;
+    width: 92px; height: 92px;
+    margin: -46px 0 0 -46px;
+    border-radius: 50%;
+    image-rendering: pixelated;
+  }
+  .rows { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+  .row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 12px; letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .row .l { color: var(--dim); white-space: nowrap; }
+  .row .l b { color: var(--text); font-weight: 700; }
+  .row .r { font-weight: 700; font-size: 14px; }
+  #p5 { color: var(--ring5); }
+  #p7 { color: var(--ring7); }
+  .stamp {
+    margin-top: 9px;
+    text-align: center;
+    font-size: 9.5px; color: #5C5A53;
+    letter-spacing: 0.06em;
+  }
+  .stamp.err { color: var(--crit); }
+</style>
+</head>
+<body>
+<div class="widget">
+  <div class="ringwrap">
+    <canvas id="rings" width="352" height="352"></canvas>
+    <canvas id="pet" width="46" height="46"></canvas>
+  </div>
+  <div class="rows">
+    <div class="row"><span class="l"><b>5H</b> resets <b id="t5">–</b></span><span class="r" id="p5">–%</span></div>
+    <div class="row"><span class="l"><b>WK</b> resets <b id="t7">–</b></span><span class="r" id="p7">–%</span></div>
+  </div>
+  <div class="stamp" id="stamp">LOADING…</div>
+</div>
+
+<script>
+/* ============ data ============ */
+const state = { five: null, seven: null, fetchedAt: 0, err: false };
+
+async function fetchUsage() {
+  try {
+    const r = await fetch('/api/usage');
+    if (!r.ok) throw new Error('bad status');
+    const d = await r.json();
+    state.five = d.five_hour;
+    state.seven = d.seven_day;
+    state.fetchedAt = Date.now();
+    state.err = false;
+  } catch (e) {
+    state.err = true;
+  }
+  renderText();
+}
+
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+function fmtWhen(iso) {
+  const d = new Date(iso), now = new Date();
+  const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  if (d.toDateString() === now.toDateString()) return hm;
+  const tmr = new Date(now); tmr.setDate(now.getDate() + 1);
+  if (d.toDateString() === tmr.toDateString()) return 'tmrw ' + hm;
+  return DAYS[d.getDay()] + ' ' + hm;
+}
+
+function renderText() {
+  if (state.five) {
+    document.getElementById('t5').textContent = fmtWhen(state.five.resets_at);
+    document.getElementById('p5').textContent = Math.round(state.five.utilization) + '%';
+  }
+  if (state.seven) {
+    document.getElementById('t7').textContent = fmtWhen(state.seven.resets_at);
+    document.getElementById('p7').textContent = Math.round(state.seven.utilization) + '%';
+  }
+  const stamp = document.getElementById('stamp');
+  if (state.err) {
+    stamp.textContent = 'OFFLINE — RETRYING';
+    stamp.className = 'stamp err';
+  } else if (state.fetchedAt) {
+    const t = new Date(state.fetchedAt);
+    stamp.textContent = 'UPDATED ' + String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+    stamp.className = 'stamp';
+  }
+  // refetch shortly after a reset moment passes
+  for (const info of [state.five, state.seven]) {
+    if (info && new Date(info.resets_at) < Date.now() && Date.now() - state.fetchedAt > 15000) {
+      fetchUsage();
+      break;
+    }
+  }
+}
+
+/* ============ apple-watch style rings ============ */
+const rc = document.getElementById('rings').getContext('2d');
+const RING = { cx: 176, cy: 176, outer: { r: 148, w: 26 }, inner: { r: 112, w: 26 } };
+const anim = { five: 0, seven: 0 };  // animated fill 0..100
+
+function ringColor(base, pct) {
+  if (pct >= 90) return getComputedStyle(document.documentElement).getPropertyValue('--crit').trim();
+  if (pct >= 70) return getComputedStyle(document.documentElement).getPropertyValue('--warn').trim();
+  return base;
+}
+
+function drawRing(cfg, pct, color) {
+  const start = -Math.PI / 2;
+  rc.lineWidth = cfg.w;
+  rc.lineCap = 'round';
+  /* track */
+  rc.globalAlpha = 0.16;
+  rc.strokeStyle = color;
+  rc.beginPath(); rc.arc(RING.cx, RING.cy, cfg.r, 0, Math.PI * 2); rc.stroke();
+  rc.globalAlpha = 1;
+  if (pct <= 0.4) return;
+  const end = start + Math.PI * 2 * Math.min(pct, 100) / 100;
+  /* subtle two-tone like watch rings */
+  const g = rc.createLinearGradient(0, 0, 352, 352);
+  g.addColorStop(0, color);
+  g.addColorStop(1, shade(color, -18));
+  rc.strokeStyle = g;
+  rc.beginPath(); rc.arc(RING.cx, RING.cy, cfg.r, start, end); rc.stroke();
+  /* bright cap dot */
+  const ex = RING.cx + Math.cos(end) * cfg.r, ey = RING.cy + Math.sin(end) * cfg.r;
+  rc.fillStyle = shade(color, 25);
+  rc.beginPath(); rc.arc(ex, ey, cfg.w / 2 - 3, 0, Math.PI * 2); rc.fill();
+}
+
+function shade(hex, amt) {
+  hex = hex.replace('#', '');
+  const n = parseInt(hex, 16);
+  const f = (v) => Math.max(0, Math.min(255, v + Math.round(255 * amt / 100)));
+  return 'rgb(' + f(n >> 16) + ',' + f((n >> 8) & 255) + ',' + f(n & 255) + ')';
+}
+
+function drawRings() {
+  rc.clearRect(0, 0, 352, 352);
+  const t5 = state.five?.utilization ?? 0;
+  const t7 = state.seven?.utilization ?? 0;
+  anim.five += (t5 - anim.five) * 0.08;
+  anim.seven += (t7 - anim.seven) * 0.08;
+  drawRing(RING.outer, anim.five, ringColor('#FF375F', t5));
+  drawRing(RING.inner, anim.seven, ringColor('#30D158', t7));
+}
+
+/* ============ center pixel pet (soot sprite) ============ */
+const P = 46;
+const pc = document.getElementById('pet').getContext('2d');
+
+const SKY = {
+  day: ['#79B4D6', '#9FD0E8', '#C6E6F2'],
+  sunset: ['#D97757', '#F0A868', '#F8CE85'],
+  dusk: ['#252B4A', '#3A4068', '#655F8C'],
+};
+const GRASS = { day: ['#7FB566', '#699B54'], sunset: ['#8CA05A', '#75894C'], dusk: ['#3E5C45', '#33503A'] };
+
+function mood() {
+  const p = Math.max(state.five?.utilization ?? 0, state.seven?.utilization ?? 0);
+  return p >= 90 ? 'dusk' : p >= 70 ? 'sunset' : 'day';
+}
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const R = mulberry32(7);
+const petals = [];
+for (let i = 0; i < 4; i++) petals.push({ x: R() * P, y: R() * 30, v: 4 + R() * 3, ph: R() * 6.28 });
+const flies = [];
+for (let i = 0; i < 5; i++) flies.push({ x: 8 + R() * 30, y: 12 + R() * 22, ph: R() * 6.28 });
+const stars = [];
+for (let i = 0; i < 12; i++) stars.push({ x: R() * P, y: R() * 22, ph: R() * 6.28 });
+
+function ppx(x, y, c) { pc.fillStyle = c; pc.fillRect(x | 0, y | 0, 1, 1); }
+
+function drawSoot(cx, cy, t) {
+  const ink = '#1E1A16';
+  /* fuzzy body: circle r4 + spikes */
+  for (let dy = -4; dy <= 4; dy++) {
+    const half = Math.round(4 * Math.sqrt(Math.max(0, 1 - (dy / 4) * (dy / 4))));
+    pc.fillStyle = ink;
+    pc.fillRect(cx - half, cy + dy, half * 2 + 1, 1);
+  }
+  for (let i = 0; i < 14; i++) {
+    const a = i / 14 * Math.PI * 2 + Math.sin(t * 3 + i) * 0.12;
+    ppx(cx + Math.cos(a) * 5.3, cy + Math.sin(a) * 5.3, ink);
+  }
+  /* eyes: blink every ~3.6s */
+  const blink = (t % 3.6) > 3.45;
+  const look = Math.round(Math.sin(t * 0.7));  /* pupils wander */
+  if (blink) {
+    pc.fillStyle = '#FFFFFF';
+    pc.fillRect(cx - 3, cy - 1, 2, 1); pc.fillRect(cx + 1, cy - 1, 2, 1);
+  } else {
+    pc.fillStyle = '#FFFFFF';
+    pc.fillRect(cx - 3, cy - 3, 2, 3); pc.fillRect(cx + 1, cy - 3, 2, 3);
+    pc.fillStyle = ink;
+    ppx(cx - 3 + (look > 0 ? 1 : 0), cy - 2, ink);
+    ppx(cx + 1 + (look > 0 ? 1 : 0), cy - 2, ink);
+  }
+}
+
+function drawPet(t) {
+  const m = mood();
+  /* sky */
+  const sky = SKY[m];
+  pc.fillStyle = sky[0]; pc.fillRect(0, 0, P, 16);
+  pc.fillStyle = sky[1]; pc.fillRect(0, 16, P, 14);
+  pc.fillStyle = sky[2]; pc.fillRect(0, 30, P, 6);
+  /* stars at dusk */
+  if (m === 'dusk') for (const s of stars) {
+    if (Math.sin(t * 2 + s.ph) > 0) ppx(s.x, s.y, 'rgba(240,240,220,0.85)');
+  }
+  /* grass */
+  const g = GRASS[m];
+  pc.fillStyle = g[0]; pc.fillRect(0, 36, P, P - 36);
+  const rg = mulberry32(11);
+  for (let i = 0; i < 26; i++) ppx(rg() * P, 36 + rg() * (P - 36), g[1]);
+  /* soot sprite hops */
+  const hop = Math.max(0, Math.sin(t * 2.2)) * 2.5;
+  drawSoot(22, 32 - hop, t);
+  /* particles */
+  if (m !== 'dusk') {
+    for (const q of petals) {
+      q.x -= q.v * 0.016; q.y += 0.06 + Math.sin(t * 2 + q.ph) * 0.05;
+      if (q.x < -1) { q.x = P + 1; q.y = 4 + Math.random() * 26; }
+      if (q.y > P - 2) q.y = 4;
+      ppx(q.x, q.y, m === 'day' ? '#F9DFE8' : '#FFE3C2');
+    }
+  } else {
+    for (const f of flies) {
+      const a = (Math.sin(t * 3 + f.ph) + 1) / 2;
+      if (a > 0.45) {
+        pc.fillStyle = 'rgba(255,231,135,' + a.toFixed(2) + ')';
+        pc.fillRect((f.x + Math.sin(t * 0.8 + f.ph) * 4) | 0, (f.y + Math.cos(t * 0.6 + f.ph * 2) * 3) | 0, 1, 1);
+      }
+    }
+  }
+}
+
+/* ============ loop & boot ============ */
+let last = 0;
+function loop(ms) {
+  drawRings();                                   /* smooth 60fps for rings */
+  if (ms - last > 100) { last = ms; drawPet(ms / 1000); }  /* ~10fps pixel pet */
+  requestAnimationFrame(loop);
+}
+
+fetchUsage();
+setInterval(fetchUsage, 60000);
+setInterval(renderText, 1000);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
