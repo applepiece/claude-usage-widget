@@ -87,8 +87,8 @@ final class WidgetView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        drawBar(y: 54, data: five, fill: orangeFill)
-        drawBar(y: 22, data: seven, fill: purpleFill)
+        drawBar(y: 42, data: five, fill: orangeFill)
+        drawBar(y: 10, data: seven, fill: purpleFill)
         drawClawd()
     }
 
@@ -101,7 +101,7 @@ final class WidgetView: NSView {
         let ink = isDark ? NSColor(red: 0.95, green: 0.93, blue: 0.88, alpha: 1)
                          : NSColor(red: 0.15, green: 0.13, blue: 0.10, alpha: 1)
 
-        let barX: CGFloat = 96
+        let barX: CGFloat = 72
         let box = NSRect(x: barX, y: y, width: bounds.width - barX - 8, height: 22)
         let pct = min(100, max(0, data?.pct ?? 0))
 
@@ -132,8 +132,9 @@ final class WidgetView: NSView {
                 withAttributes: [.font: font, .foregroundColor: ink])
     }
 
-    // ============ Claw'd — Among Us style: bean body, big visor, backpack,
-    // dark outline around every shape (that's what makes it readable) ============
+    // ============ Claw'd — 3/4 angled view, hobby poses ============
+    // Grid 20×20, u=3. Facing front-left: right columns are the darker side plane,
+    // back legs shorter+darker for depth. Rows 0-1 = hat/prop headroom.
     private enum Pose { case idle, read, computer, music, camera, cook, sleep, dance }
 
     private var pose: Pose {
@@ -144,54 +145,22 @@ final class WidgetView: NSView {
         return cycle[Int(t / 7) % cycle.count]
     }
 
-    // palette
-    private let base = NSColor(red: 0.86, green: 0.47, blue: 0.34, alpha: 1)   // salmon
-    private let baseHi = NSColor(red: 0.93, green: 0.58, blue: 0.45, alpha: 1)
-    private let baseLo = NSColor(red: 0.69, green: 0.34, blue: 0.23, alpha: 1)
-    private let sideC = NSColor(red: 0.74, green: 0.38, blue: 0.27, alpha: 1)
-    private let lineC = NSColor(red: 0.27, green: 0.12, blue: 0.08, alpha: 1)  // outline
-    private let inkC = NSColor(red: 0.10, green: 0.07, blue: 0.05, alpha: 1)
-    private let glass = NSColor(red: 0.72, green: 0.88, blue: 0.91, alpha: 1)
-    private let glassHi = NSColor(red: 0.92, green: 0.98, blue: 0.99, alpha: 1)
-    private let glassLo = NSColor(red: 0.52, green: 0.70, blue: 0.76, alpha: 1)
-
-    // draw a group of blocks with an auto-computed dark outline around the union
-    private func outlined(_ parts: [(gx: Int, gy: Int, w: Int, h: Int, c: NSColor)],
-                          u: CGFloat, ox: CGFloat, oyTop: CGFloat) {
-        var cells = [Int: [Int: NSColor]]()
-        for p in parts {
-            for y in p.gy..<(p.gy + p.h) {
-                for x in p.gx..<(p.gx + p.w) { cells[y, default: [:]][x] = p.c }
-            }
-        }
-        func rect(_ x: Int, _ y: Int) -> NSRect {
-            NSRect(x: ox + CGFloat(x) * u, y: oyTop - CGFloat(y + 1) * u, width: u, height: u)
-        }
-        lineC.setFill()
-        for (y, row) in cells {
-            for (x, _) in row {
-                for dy in -1...1 {
-                    for dx in -1...1 where cells[y + dy]?[x + dx] == nil {
-                        rect(x + dx, y + dy).fill()
-                    }
-                }
-            }
-        }
-        for (y, row) in cells {
-            for (x, c) in row { c.setFill(); rect(x, y).fill() }
-        }
-    }
+    // palette (official salmon + side plane)
+    private let base = NSColor(red: 0.86, green: 0.47, blue: 0.34, alpha: 1)
+    private let baseHi = NSColor(red: 0.92, green: 0.57, blue: 0.44, alpha: 1)
+    private let baseLo = NSColor(red: 0.66, green: 0.32, blue: 0.22, alpha: 1)
+    private let side = NSColor(red: 0.74, green: 0.38, blue: 0.27, alpha: 1)
+    private let inkC = NSColor(red: 0.12, green: 0.09, blue: 0.07, alpha: 1)
 
     private func drawClawd() {
-        let u: CGFloat = 4
+        let u: CGFloat = 3
         let mood = severity
         let p = pose
         let dancing = (p == .dance)
-        let bob = dancing ? CGFloat(Int(t * 4) % 2) * 3 - 1
-                          : (sin(t * (p == .sleep ? 1.0 : 2.0)) * 2).rounded()
+        let bobBase = dancing ? CGFloat(Int(t * 4) % 2) * 3 - 1 : (sin(t * (p == .sleep ? 1.0 : 2.0)) * 2).rounded()
         let jitter = mood == 2 ? (sin(t * 22) * 1).rounded() : 0
-        let ox = 5 + jitter
-        let oyTop = 90 + bob
+        let ox = 4 + jitter
+        let oyTop = 70 + bobBase
 
         func cell(_ gx: Int, _ gy: Int, _ w: Int = 1, _ h: Int = 1, _ c: NSColor) {
             c.setFill()
@@ -201,164 +170,134 @@ final class WidgetView: NSView {
         func gp(_ gx: CGFloat, _ gy: CGFloat) -> NSPoint {
             NSPoint(x: ox + gx * u, y: oyTop - gy * u)
         }
-        func group(_ parts: [(gx: Int, gy: Int, w: Int, h: Int, c: NSColor)]) {
-            outlined(parts, u: u, ox: ox, oyTop: oyTop)
-        }
 
         // floor shadow (fixed — sells the float)
         NSColor.black.withAlphaComponent(isDark ? 0.35 : 0.16).setFill()
-        NSRect(x: ox + 4 * u, y: 4, width: 13 * u, height: 2).fill()
+        NSRect(x: ox + 4 * u, y: 6, width: 12 * u, height: 2).fill()
 
-        // ---- crewmate silhouette: bean body + backpack + legs (one outline) ----
-        let liftA = (dancing ? Int(t * 4) : (sin(t * 3.0) > 0 ? 1 : 0)) % 2
+        // legs — front pair full, back pair shorter + darker (depth)
+        let liftA = (dancing ? Int(t * 4) : Int(sin(t * 3.0) > 0 ? 1 : 0)) % 2
         let liftB = 1 - liftA
-        var body: [(gx: Int, gy: Int, w: Int, h: Int, c: NSColor)] = [
-            // bean (rounded top/bottom), light left edge, dark right edge
-            (5, 2, 10, 1, baseHi),
-            (4, 3, 12, 1, base),
-            (3, 4, 14, 10, base),
-            (3, 4, 1, 10, baseHi),
-            (15, 3, 1, 12, sideC),
-            (16, 4, 1, 10, sideC),
-            (4, 14, 12, 1, base),
-            (5, 15, 10, 1, baseLo),
-            // backpack (right = behind)
-            (17, 5, 2, 1, sideC),
-            (17, 6, 3, 6, sideC),
-            (17, 12, 2, 1, baseLo),
-        ]
-        // legs: two chunky front + one hint of the far leg (depth)
-        body.append((4, 16, 3, 2 - liftA + 1, base))
-        body.append((4, 18 - liftA, 3, 1, baseLo))
-        body.append((10, 16, 3, 2 - liftB + 1, base))
-        body.append((10, 18 - liftB, 3, 1, baseLo))
-        body.append((14, 16, 2, 2 - liftB, sideC))
-        group(body)
+        let kick = dancing ? 1 : 0
+        for (gx, lift) in [(11, liftB), (14, liftA)] {   // back legs first
+            cell(gx, 14, 2, 4 - lift - kick, side)
+            cell(gx, 17 - lift - kick, 2, 1, baseLo)
+        }
+        for (gx, lift) in [(3, liftA), (7, liftB)] {     // front legs
+            cell(gx, 14, 2, 5 - lift - kick, base)
+            cell(gx, 18 - lift - kick, 2, 1, baseLo)
+        }
 
-        // ---- big Among Us visor (Claw'd's pixel eyes live inside) ----
-        let sleeping = (p == .sleep)
-        let g0 = sleeping ? glassLo : glass
-        group([
-            (3, 4, 9, 1, g0),
-            (2, 5, 11, 3, g0),
-            (3, 8, 9, 1, sleeping ? glassLo : glassLo),
-            (3, 5, 4, 1, sleeping ? glassLo : glassHi),   // glare stripe
-        ])
+        // body: front face + right side plane + top highlight
+        cell(2, 2, 13, 12, base)
+        cell(15, 2, 3, 12, side)
+        cell(2, 2, 13, 1, baseHi)
+        cell(15, 2, 3, 1, base)
+        cell(2, 13, 16, 1, baseLo)
 
-        // ---- pose props (each with its own outline = readable) ----
+        // arms + pose props (held toward the facing side)
         switch p {
         case .idle:
             let wave = sin(t * 2.5) > 0.2 ? 2 : 0
-            group([(0, 10 - wave, 2, 3, base), (0, 12 - wave, 2, 1, baseLo)])
+            cell(0, 6 - wave, 2, 3, base)
+            cell(0, 8 - wave, 2, 1, baseLo)
+            cell(18, 6, 1, 2, side)
         case .dance:
+            // both arms up, alternating; sparkles around
             let up = Int(t * 4) % 2
-            group([(0, 3 + up, 2, 3, base)])
-            group([(19, 4 - up, 2, 3, sideC)])
+            cell(0, 3 + up, 2, 3, base)
+            cell(18, 4 - up, 2, 3, side)
             let sp = NSColor(red: 1.0, green: 0.85, blue: 0.35, alpha: 1)
-            if up == 0 { cell(2, 0, 1, 1, sp); cell(18, 1, 1, 1, sp); cell(0, 7, 1, 1, sp) }
-            else { cell(4, 1, 1, 1, sp); cell(20, 0, 1, 1, sp); cell(21, 6, 1, 1, sp) }
+            if up == 0 { cell(1, 0, 1, 1, sp); cell(17, 2, 1, 1, sp) }
+            else { cell(3, 1, 1, 1, sp); cell(19, 0, 1, 1, sp) }
         case .sleep:
-            group([(0, 11, 2, 3, base), (0, 13, 2, 1, baseLo)])
+            cell(0, 7, 2, 3, base)
+            cell(18, 7, 1, 2, side)
+            // rising Zzz (pixel font)
             let phase = Int(t) % 3
-            let zc = isDark ? NSColor(white: 0.92, alpha: 1) : inkC
-            if phase >= 0 { ("z" as NSString).draw(at: gp(16.0, 3.0), withAttributes: [.font: pixelFont(7), .foregroundColor: zc]) }
-            if phase >= 1 { ("z" as NSString).draw(at: gp(17.8, 1.4), withAttributes: [.font: pixelFont(8), .foregroundColor: zc]) }
-            if phase >= 2 { ("Z" as NSString).draw(at: gp(19.4, -0.4), withAttributes: [.font: pixelFont(9), .foregroundColor: zc]) }
+            let zc = isDark ? NSColor(white: 0.9, alpha: 1) : inkC
+            if phase >= 0 { ("z" as NSString).draw(at: gp(15.5, 2.2), withAttributes: [.font: pixelFont(6), .foregroundColor: zc]) }
+            if phase >= 1 { ("z" as NSString).draw(at: gp(17, 1.0), withAttributes: [.font: pixelFont(7), .foregroundColor: zc]) }
+            if phase >= 2 { ("Z" as NSString).draw(at: gp(18.2, -0.4), withAttributes: [.font: pixelFont(8), .foregroundColor: zc]) }
         case .read:
-            let green = NSColor(red: 0.27, green: 0.62, blue: 0.33, alpha: 1)
-            let greenDk = NSColor(red: 0.18, green: 0.44, blue: 0.24, alpha: 1)
-            let page = NSColor(red: 0.97, green: 0.96, blue: 0.90, alpha: 1)
-            group([
-                (0, 10, 10, 6, green),
-                (1, 11, 3, 3, page),
-                (6, 11, 3, 3, page),
-                (4, 10, 2, 6, greenDk),
-            ])
-            group([(9, 12, 2, 2, base)])   // claw hand on the book
+            cell(4, 8, 8, 5, NSColor(red: 0.27, green: 0.62, blue: 0.33, alpha: 1))
+            cell(5, 8, 2, 3, NSColor(red: 0.96, green: 0.95, blue: 0.89, alpha: 1))
+            cell(9, 8, 2, 3, NSColor(red: 0.96, green: 0.95, blue: 0.89, alpha: 1))
+            cell(7, 8, 2, 5, NSColor(red: 0.20, green: 0.48, blue: 0.26, alpha: 1))
+            cell(2, 9, 2, 2, base)
+            cell(12, 9, 2, 2, side)
         case .computer:
-            let deck = NSColor(red: 0.36, green: 0.36, blue: 0.40, alpha: 1)
-            let bezel = NSColor(red: 0.22, green: 0.22, blue: 0.26, alpha: 1)
-            let screen = NSColor(red: 0.55, green: 0.76, blue: 0.95, alpha: 1)
-            group([
-                (0, 9, 9, 5, bezel),
-                (1, 10, 7, 3, screen),
-                (0, 14, 11, 2, deck),
-            ])
-            let cur = Int(t * 2) % 5
-            cell(2 + cur, 11, 1, 1, NSColor(red: 0.20, green: 0.35, blue: 0.55, alpha: 1))
-            group([(9, 13, 2, 2, base)])   // claw on the deck
+            cell(4, 7, 8, 5, NSColor(red: 0.24, green: 0.24, blue: 0.28, alpha: 1))
+            cell(5, 8, 6, 3, NSColor(red: 0.55, green: 0.76, blue: 0.95, alpha: 1))
+            let cur = Int(t * 2) % 4
+            cell(5 + cur, 9, 1, 1, NSColor(red: 0.20, green: 0.35, blue: 0.55, alpha: 1))
+            cell(3, 12, 10, 2, NSColor(red: 0.36, green: 0.36, blue: 0.40, alpha: 1))
+            cell(2, 11, 2, 2, base)
+            cell(12, 11, 2, 2, side)
         case .music:
             let blue = NSColor(red: 0.34, green: 0.45, blue: 0.76, alpha: 1)
-            let blueDk = NSColor(red: 0.25, green: 0.33, blue: 0.58, alpha: 1)
-            group([
-                (5, 0, 10, 1, blue),
-                (3, 1, 3, 1, blue), (14, 1, 3, 1, blueDk),
-                (2, 2, 2, 4, blue),                 // near pad
-                (16, 2, 2, 4, blueDk),              // far pad
-            ])
+            let blueDk = NSColor(red: 0.26, green: 0.35, blue: 0.60, alpha: 1)
+            cell(4, 0, 10, 1, blue)
+            cell(2, 1, 3, 1, blue)
+            cell(13, 1, 3, 1, blueDk)
+            cell(0, 2, 2, 5, blue)          // near pad (big)
+            cell(16, 2, 2, 4, blueDk)       // far pad (smaller, darker)
             let hop = Int(t * 2) % 2
-            let zc = isDark ? NSColor(white: 0.92, alpha: 1) : inkC
-            ("♪" as NSString).draw(at: gp(19.2, CGFloat(2 - hop)), withAttributes: [.font: pixelFont(8), .foregroundColor: zc])
-            ("♪" as NSString).draw(at: gp(17.4, CGFloat(4 - (1 - hop))), withAttributes: [.font: pixelFont(6), .foregroundColor: zc])
-            group([(0, 9 - hop, 2, 3, base)])   // grooving claw
+            let zc = inkC
+            cell(16, 1 - min(1, hop), 1, 2, zc)
+            cell(15, 3 - min(1, hop), 1, 1, zc)
+            cell(18, 2 - (1 - hop), 1, 2, zc)
+            cell(19, 4 - (1 - hop), 1, 1, zc)
+            let g = hop == 0 ? 1 : 0
+            cell(0, 8 - g, 2, 3, base)
+            cell(18, 7 + g, 1, 2, side)
         case .camera:
-            let camBody = NSColor(red: 0.17, green: 0.15, blue: 0.14, alpha: 1)
-            let lens = NSColor(red: 0.55, green: 0.72, blue: 0.90, alpha: 1)
-            group([
-                (1, 5, 8, 4, camBody),
-                (6, 4, 2, 1, NSColor(red: 0.32, green: 0.30, blue: 0.28, alpha: 1)),
-                (1, 6, 2, 2, lens),
-            ])
-            group([(9, 7, 2, 2, base)])   // claw holding it
+            cell(4, 6, 8, 4, NSColor(red: 0.16, green: 0.14, blue: 0.13, alpha: 1))
+            cell(5, 7, 2, 2, NSColor(red: 0.55, green: 0.72, blue: 0.90, alpha: 1))
+            cell(11, 5, 2, 1, NSColor(red: 0.30, green: 0.28, blue: 0.26, alpha: 1))
+            cell(2, 7, 2, 2, base)
+            cell(12, 7, 2, 2, side)
             if t.truncatingRemainder(dividingBy: 3.5) < 0.3 {
                 let fl = NSColor(red: 1.0, green: 0.95, blue: 0.55, alpha: 1)
-                cell(0, 0, 1, 1, fl); cell(2, 1, 1, 1, fl)
-                cell(0, 2, 1, 1, fl); cell(1, 1, 1, 1, NSColor.white)
+                cell(1, 1, 1, 1, fl); cell(0, 2, 1, 1, fl); cell(2, 2, 1, 1, fl)
+                cell(1, 3, 1, 1, fl); cell(1, 2, 1, 1, NSColor.white)
             }
         case .cook:
-            let hatW = NSColor(red: 0.97, green: 0.96, blue: 0.94, alpha: 1)
-            let hatLo = NSColor(red: 0.83, green: 0.83, blue: 0.87, alpha: 1)
-            group([
-                (5, 0, 9, 1, hatW),
-                (4, 1, 11, 1, hatLo),
-            ])
-            let pan = NSColor(red: 0.26, green: 0.26, blue: 0.29, alpha: 1)
-            let wood = NSColor(red: 0.48, green: 0.33, blue: 0.20, alpha: 1)
-            group([
-                (0, 12, 6, 2, pan),
-                (6, 12, 2, 1, wood),
-            ])
-            // fried egg in the pan
-            group([(1, 11, 3, 1, NSColor.white), (2, 11, 1, 1, NSColor(red: 1.0, green: 0.78, blue: 0.20, alpha: 1))])
-            group([(8, 11, 2, 2, base)])   // claw on the handle
+            let hatW = NSColor(red: 0.96, green: 0.95, blue: 0.93, alpha: 1)
+            cell(5, 0, 8, 2, hatW)
+            cell(4, 1, 1, 1, hatW)
+            cell(13, 1, 1, 1, NSColor(red: 0.84, green: 0.84, blue: 0.88, alpha: 1))
+            cell(5, 1, 8, 1, NSColor(red: 0.84, green: 0.84, blue: 0.88, alpha: 1))
+            cell(0, 9, 5, 2, NSColor(red: 0.28, green: 0.28, blue: 0.31, alpha: 1))
+            cell(5, 9, 2, 1, NSColor(red: 0.48, green: 0.33, blue: 0.20, alpha: 1))
+            cell(6, 8, 2, 2, base)
             let s = Int(t * 3) % 3
-            let steam = NSColor(white: isDark ? 0.85 : 0.50, alpha: 0.85)
-            cell(1, 9 - s, 1, 1, steam)
-            cell(4, 8 - ((s + 1) % 3), 1, 1, steam)
+            let steam = NSColor(white: isDark ? 0.85 : 0.55, alpha: 0.8)
+            cell(1, 7 - s, 1, 1, steam)
+            cell(3, 6 - ((s + 1) % 3), 1, 1, steam)
         }
 
-        // ---- Claw'd's eyes inside the visor ----
+        // face — eyes sit on the front-left plane (3/4 view)
         switch mood {
         case 0:
             let blink = t.truncatingRemainder(dividingBy: 3.4) > 3.2
             let closed = (p == .music || p == .sleep || p == .dance)
             let down = (p == .read) ? 1 : 0
-            if p == .camera { break }   // face is behind the camera
             if blink || closed {
-                cell(4, 6 + down, 2, 1, inkC)
-                cell(8, 6 + down, 2, 1, inkC)
+                cell(5, 5 + down, 2, 1, inkC)
+                cell(10, 5 + down, 2, 1, inkC)
             } else {
-                cell(4, 5 + down, 2, 2, inkC)
-                cell(8, 5 + down, 2, 2, inkC)
+                cell(5, 4 + down, 2, 2, inkC)
+                cell(10, 4 + down, 2, 2, inkC)
             }
         case 1:
-            cell(4, 6, 2, 1, inkC)
-            cell(8, 6, 2, 1, inkC)
+            cell(5, 5, 2, 1, inkC)
+            cell(10, 5, 2, 1, inkC)
         default:
-            cell(3, 4, 2, 1, inkC); cell(4, 5, 2, 1, inkC); cell(3, 6, 2, 1, inkC)
-            cell(9, 4, 2, 1, inkC); cell(8, 5, 2, 1, inkC); cell(9, 6, 2, 1, inkC)
+            cell(4, 3, 2, 1, inkC); cell(5, 4, 2, 1, inkC); cell(4, 5, 2, 1, inkC)
+            cell(11, 3, 2, 1, inkC); cell(10, 4, 2, 1, inkC); cell(11, 5, 2, 1, inkC)
             let drip = Int(t * 5) % 5
-            cell(14, drip, 1, 2, NSColor(red: 0.35, green: 0.66, blue: 0.94, alpha: 1))
+            cell(16, drip, 1, 2, NSColor(red: 0.35, green: 0.66, blue: 0.94, alpha: 1))
         }
     }
 }

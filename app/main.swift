@@ -29,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // launch at login (idempotent; user-visible in System Settings › Login Items)
         try? SMAppService.mainApp.register()
 
-        let rect = NSRect(x: 0, y: 0, width: 240, height: 96)
+        let rect = NSRect(x: 0, y: 0, width: 216, height: 74)
         panel = NSPanel(contentRect: rect,
                         styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)

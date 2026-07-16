@@ -3,7 +3,7 @@
 A tiny **Codex-pets-style floating desktop widget** for macOS that shows your real
 Claude subscription usage — the 5-hour session limit and the weekly limit — with
 **Claw'd**, Claude Code's crab mascot, as an animated pixel-art companion
-(Among Us-style crewmate look, 90's Pokemon UI).
+(blocky look faithful to the official figure, 90's Pokemon UI).
 
 ![Claw'd idle](docs/pose-idle.png)
 
