@@ -33,7 +33,7 @@ and a machine where you are **logged in to [Claude Code](https://claude.com/clau
 with a Claude subscription.
 
 ```bash
-git clone https://github.com/hengkp/claude-usage-widget.git
+git clone https://github.com/applepiece/claude-usage-widget.git
 cd claude-usage-widget
 ./install.sh
 ```
