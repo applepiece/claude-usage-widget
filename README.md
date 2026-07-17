@@ -15,14 +15,15 @@ Claude subscription usage — the 5-hour session limit and the weekly limit — 
   every 60 s. Each bar shows the reset day/time and the percent used:
   orange = 5-hour session, purple = weekly.
 - **Claw'd reacts to your usage**
-  - cycles hobbies while things are calm: reading, coding, music, photography, cooking
-
-    ![read](docs/pose-read.png) ![computer](docs/pose-computer.png) ![music](docs/pose-music.png) ![camera](docs/pose-camera.png) ![cook](docs/pose-cook.png)
-  - **sleeps at night** (22:00–07:00) ![sleep](docs/pose-sleep.png)
-  - **dances when a limit resets** ![dance](docs/pose-dance.png)
-  - gets worried at ≥70 % and panics (>< eyes, sweat, trembling) at ≥90 %
-
-    ![panic](docs/pose-panic.png)
+  - cycles hobbies while things are calm:
+  - **reading** <br/> ![read](docs/pose-read.png)
+  - **coding** <br/> ![computer](docs/pose-computer.png)
+  - **listen to music** <br/> ![music](docs/pose-music.png)
+  - **photography** <br/> ![camera](docs/pose-camera.png)
+  - **cooking** <br/> ![cook](docs/pose-cook.png)
+  - **sleeps at night** (22:00–07:00) <br/> ![sleep](docs/pose-sleep.png)
+  - **dances when a limit resets** <br/> ![dance](docs/pose-dance.png)
+  - gets worried at ≥70 % and panics (>< eyes, sweat, trembling) at ≥90 % <br/> ![panic](docs/pose-panic.png)
 - Auto-starts at login (registered via `SMAppService`; visible in
   System Settings › Login Items).
 
