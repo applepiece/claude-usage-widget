@@ -60,6 +60,66 @@ final class WidgetView: NSView {
     var danceUntil: CGFloat = -1  // celebrate until this clock value
     var nightOverride: Bool?      // preview hook
 
+    // click Claw'd's legs to tuck the widget into the menu bar
+    var onLegClick: (() -> Void)?
+    // context menu is rebuilt on each open so checkmarks stay in sync
+    var menuProvider: (() -> NSMenu)?
+    private(set) var legHitRect: NSRect = .zero
+
+    // manual drag (so a click on the legs is distinguishable from a move)
+    private var dragOrigin: NSPoint = .zero
+    private var mouseDownScreen: NSPoint = .zero
+    private var dragged = false
+
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        dragged = false
+        mouseDownScreen = NSEvent.mouseLocation
+        dragOrigin = window?.frame.origin ?? .zero
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let now = NSEvent.mouseLocation
+        let dx = now.x - mouseDownScreen.x
+        let dy = now.y - mouseDownScreen.y
+        if abs(dx) > 2 || abs(dy) > 2 { dragged = true }
+        window?.setFrameOrigin(NSPoint(x: dragOrigin.x + dx, y: dragOrigin.y + dy))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard !dragged else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        if legHitRect.contains(p) { onLegClick?() }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? { menuProvider?() }
+
+    // The official blocky Claw'd figure as a monochrome menu-bar template
+    // (auto-tints white on a dark bar, black on a light bar). Drawn on a 20×14
+    // grid (y-up) with straight stub arms; the figure fills the whole canvas so
+    // it reads large in the bar. The two eyes are punched-through holes.
+    static func menuBarIcon() -> NSImage {
+        let gw: CGFloat = 20, gh: CGFloat = 14
+        let c: CGFloat = 17.0 / gh          // scale so the image is ~17pt tall
+        let img = NSImage(size: NSSize(width: gw * c, height: gh * c), flipped: false) { _ in
+            NSColor.black.setFill()
+            func r(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) {
+                NSRect(x: x * c, y: y * c, width: w * c, height: h * c).fill()
+            }
+            r(4, 4, 12, 10)                        // body
+            r(1, 8, 3, 3); r(16, 8, 3, 3)          // straight stub arms
+            r(4, 0, 2, 4); r(7, 0, 2, 4)           // legs (left pair)
+            r(11, 0, 2, 4); r(14, 0, 2, 4)         // legs (right pair)
+            NSGraphicsContext.current?.compositingOperation = .clear
+            r(6, 10, 2, 2); r(11, 10, 2, 2)        // eye holes
+            NSGraphicsContext.current?.compositingOperation = .sourceOver
+            return true
+        }
+        img.isTemplate = true
+        return img
+    }
+
     // Pokemon-ish flat palette (fixed per row: orange = 5H, purple = WK)
     private let orangeFill = NSColor(red: 0.94, green: 0.50, blue: 0.19, alpha: 1)  // #F08030
     private let purpleFill = NSColor(red: 0.68, green: 0.35, blue: 0.78, alpha: 1)  // #AE5AC8
@@ -161,6 +221,9 @@ final class WidgetView: NSView {
         let jitter = mood == 2 ? (sin(t * 22) * 1).rounded() : 0
         let ox = 4 + jitter
         let oyTop = 70 + bobBase
+
+        // clickable leg band (below the body) — click to tuck into the menu bar
+        legHitRect = NSRect(x: ox, y: oyTop - 19 * u, width: 18 * u, height: 7 * u)
 
         func cell(_ gx: Int, _ gy: Int, _ w: Int = 1, _ h: Int = 1, _ c: NSColor) {
             c.setFill()

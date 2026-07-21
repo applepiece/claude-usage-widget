@@ -24,6 +24,12 @@ Claude subscription usage — the 5-hour session limit and the weekly limit — 
   - **sleeps at night** (22:00–07:00) <br/> ![sleep](docs/pose-sleep.png)
   - **dances when a limit resets** <br/> ![dance](docs/pose-dance.png)
   - gets worried at ≥70 % and panics (>< eyes, sweat, trembling) at ≥90 % <br/> ![panic](docs/pose-panic.png)
+- **Collapse into the menu bar** — click Claw'd's **legs** to tuck the whole
+  widget away into a tiny white Claw'd glyph in the macOS menu bar. Left-click the
+  glyph to bring the widget back; right-click (or ⌃-click) for options. Choose what
+  the glyph shows next to it under **Menu Bar %**: `Off`, `5-Hour only`,
+  `Weekly only`, or `Both`. The collapsed/expanded state is remembered across
+  launches.
 - Auto-starts at login (registered via `SMAppService`; visible in
   System Settings › Login Items).
 
@@ -80,6 +86,12 @@ Widget ลอยบนจอแสดง limit การใช้งาน Claud
 ทำกิจกรรมเพลินๆ ตอนโควต้าเหลือเยอะ, หน้ากังวลเมื่อใช้เกิน 70%, ตกใจเหงื่อแตกเมื่อเกิน
 90%, นอนหลับตอนกลางคืน และเต้นฉลองตอนโควต้ารีเซ็ต ติดตั้งด้วย `./install.sh`
 (ต้องมี Xcode Command Line Tools และ login Claude Code ไว้แล้ว)
+
+**ย่อเก็บขึ้น menu bar:** คลิกที่ **ขา** ของน้อง Claw'd เพื่อย่อ widget ทั้งตัวไปเป็น
+ไอคอน Claw'd สีขาวเล็กๆ บน menu bar ด้านบน — คลิกซ้ายที่ไอคอนเพื่อเรียก widget กลับมา,
+คลิกขวา (หรือ ⌃-คลิก) เพื่อเปิดเมนูตัวเลือก เลือกได้ว่าจะให้โชว์เปอร์เซ็นต์ข้างไอคอนแบบไหน
+ที่ **Menu Bar %**: ปิด (Off) / เฉพาะรอบ 5 ชั่วโมง (5-Hour only) / เฉพาะรายสัปดาห์
+(Weekly only) / ทั้งคู่ (Both) โดยจะจำสถานะย่อ/ขยายไว้ข้ามการเปิดโปรแกรมครั้งถัดไป
 
 ## Credits & license
 

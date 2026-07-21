@@ -8,12 +8,21 @@ let widgetDir = ("~/claude-usage-widget" as NSString).expandingTildeInPath
 let apiURL = URL(string: "http://127.0.0.1:8737/api/usage")!
 let pingURL = URL(string: "http://127.0.0.1:8737/api/ping")!
 
+// What the menu-bar status item shows next to the Claw'd glyph.
+enum BarMode: String { case off, five, seven, both }
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var panel: NSPanel!
     var view: WidgetView!
+    var statusItem: NSStatusItem?
     var failCount = 0
     var lastReset5: String?
     var lastReset7: String?
+
+    var barMode: BarMode {
+        get { BarMode(rawValue: UserDefaults.standard.string(forKey: "barMode") ?? "") ?? .five }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "barMode") }
+    }
 
     func applicationDidFinishLaunching(_ note: Notification) {
         // single instance — a second launch just exits
@@ -38,7 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.isMovableByWindowBackground = true
+        panel.isMovableByWindowBackground = false  // WidgetView drags manually
         panel.hidesOnDeactivate = false
 
         view = WidgetView(frame: rect)
@@ -53,19 +62,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         panel.orderFrontRegardless()
 
-        let menu = NSMenu()
-        let r = NSMenuItem(title: "Refresh Now", action: #selector(refresh), keyEquivalent: "r")
-        r.target = self
-        menu.addItem(r)
-        let q = NSMenuItem(title: "Quit Claude Usage", action: #selector(quit), keyEquivalent: "q")
-        q.target = self
-        menu.addItem(q)
-        view.menu = menu
+        // right-click menu (rebuilt each open so checkmarks reflect state);
+        // click Claw'd's legs to tuck the widget into the menu bar
+        view.menuProvider = { [weak self] in self?.buildMenu(minimized: false) ?? NSMenu() }
+        view.onLegClick = { [weak self] in self?.minimizeToMenuBar() }
 
         NotificationCenter.default.addObserver(
             forName: NSWindow.didMoveNotification, object: panel, queue: .main) { _ in
             UserDefaults.standard.set(NSStringFromPoint(self.panel.frame.origin), forKey: "pos")
         }
+
+        // restore the tucked-away state from last session
+        if UserDefaults.standard.bool(forKey: "minimized") { minimizeToMenuBar() }
 
         ensureServer()
         refresh()
@@ -75,6 +83,115 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.view.t += 1.0 / 20.0
             self.view.needsDisplay = true
         }
+    }
+
+    // ================= menu-bar (collapsed) mode =================
+
+    @objc func minimizeToMenuBar() {
+        if statusItem == nil {
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            item.button?.image = WidgetView.menuBarIcon()
+            item.button?.imagePosition = .imageLeading
+            item.button?.target = self
+            item.button?.action = #selector(statusClicked)
+            item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            statusItem = item
+        }
+        updateStatusItem()
+        panel.orderOut(nil)
+        UserDefaults.standard.set(true, forKey: "minimized")
+    }
+
+    @objc func restoreFromMenuBar() {
+        panel.orderFrontRegardless()
+        if let item = statusItem { NSStatusBar.system.removeStatusItem(item); statusItem = nil }
+        UserDefaults.standard.set(false, forKey: "minimized")
+    }
+
+    // left-click the glyph → reopen the widget; right/ctrl-click → options menu
+    @objc func statusClicked() {
+        let e = NSApp.currentEvent
+        if e?.type == .rightMouseUp || e?.modifierFlags.contains(.control) == true {
+            let menu = buildMenu(minimized: true)
+            statusItem?.menu = menu
+            statusItem?.button?.performClick(nil)
+            statusItem?.menu = nil
+        } else {
+            restoreFromMenuBar()
+        }
+    }
+
+    private func pctText(_ v: (pct: Double, when: String)?) -> String {
+        guard !view.offline, let v else { return "–" }
+        return "\(Int(v.pct.rounded()))%"
+    }
+
+    // percentage string shown next to the glyph, per the chosen BarMode
+    private func statusText() -> String {
+        switch barMode {
+        case .off:   return ""
+        case .five:  return pctText(view.five)
+        case .seven: return pctText(view.seven)
+        case .both:  return pctText(view.five) + " · " + pctText(view.seven)
+        }
+    }
+
+    func updateStatusItem() {
+        guard let btn = statusItem?.button else { return }
+        let txt = statusText()
+        if txt.isEmpty {
+            btn.attributedTitle = NSAttributedString(string: "")
+        } else {
+            let font = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
+            btn.attributedTitle = NSAttributedString(
+                string: " " + txt,
+                attributes: [.font: font, .foregroundColor: NSColor.labelColor])
+        }
+    }
+
+    @objc func setBarMode(_ sender: NSMenuItem) {
+        if let raw = sender.representedObject as? String, let m = BarMode(rawValue: raw) {
+            barMode = m
+        }
+        updateStatusItem()
+    }
+
+    func buildMenu(minimized: Bool) -> NSMenu {
+        let menu = NSMenu()
+        if minimized {
+            let s = NSMenuItem(title: "Show Widget", action: #selector(restoreFromMenuBar), keyEquivalent: "")
+            s.target = self
+            menu.addItem(s)
+        } else {
+            let m = NSMenuItem(title: "Minimize to Menu Bar", action: #selector(minimizeToMenuBar), keyEquivalent: "m")
+            m.target = self
+            menu.addItem(m)
+        }
+        menu.addItem(.separator())
+
+        let disp = NSMenuItem(title: "Menu Bar %", action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+        let options: [(String, BarMode)] = [
+            ("Off", .off), ("5-Hour only", .five), ("Weekly only", .seven), ("Both", .both),
+        ]
+        for (title, mode) in options {
+            let it = NSMenuItem(title: title, action: #selector(setBarMode(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = mode.rawValue
+            it.state = (barMode == mode) ? .on : .off
+            sub.addItem(it)
+        }
+        disp.submenu = sub
+        menu.addItem(disp)
+        menu.addItem(.separator())
+
+        let r = NSMenuItem(title: "Refresh Now", action: #selector(refresh), keyEquivalent: "r")
+        r.target = self
+        menu.addItem(r)
+        let q = NSMenuItem(title: "Quit Claude Usage", action: #selector(quit), keyEquivalent: "q")
+        q.target = self
+        menu.addItem(q)
+        return menu
     }
 
     @objc func quit() { NSApp.terminate(nil) }
@@ -129,6 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if r5 != nil { self.lastReset5 = r5 }
                 if r7 != nil { self.lastReset7 = r7 }
 
+                self.updateStatusItem()
                 self.view.needsDisplay = true
             }
         }.resume()
