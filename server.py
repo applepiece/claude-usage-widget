@@ -30,9 +30,12 @@ _lock = threading.Lock()
 _oauth_lock = threading.Lock()
 _cache = {"at": 0.0, "key": None, "data": None}
 _account_lock = threading.Lock()
-_profile_cache = {"at": 0.0, "key": None, "data": None}
+_profile_cache = {"at": 0.0, "key": None, "data": None, "ttl": 0.0}
 CACHE_SECONDS = 30
 PROFILE_CACHE_SECONDS = 30 * 60
+# a failed lookup must not pin the fallback name for the full half hour, so it
+# is held only briefly and retried once the network is back
+PROFILE_RETRY_SECONDS = 60
 
 
 def keychain_read():
@@ -126,7 +129,7 @@ def fetch_account():
 
     cache_key = (local.get("email"), local.get("org"))
     with _account_lock:
-        fresh = time.time() - _profile_cache["at"] < PROFILE_CACHE_SECONDS
+        fresh = time.time() - _profile_cache["at"] < _profile_cache["ttl"]
         if fresh and _profile_cache["key"] == cache_key:
             profile = _profile_cache["data"] or {}
         else:
@@ -139,11 +142,15 @@ def fetch_account():
             except Exception:
                 pass
             _profile_cache.update(
-                at=time.time(), key=cache_key, data=profile)
+                at=time.time(), key=cache_key, data=profile,
+                ttl=(PROFILE_CACHE_SECONDS if profile else PROFILE_RETRY_SECONDS))
 
     remote_account = profile.get("account") or {}
     organization = profile.get("organization") or {}
-    email = local.get("email") or remote_account.get("email") or ""
+    # the profile endpoint is the account the token actually belongs to.
+    # ~/.claude.json only records whatever was written at the last login, so on
+    # a Mac that was re-authenticated as somebody else it names the wrong person
+    email = remote_account.get("email") or local.get("email") or ""
     local["email"] = email
     local["name"] = (remote_account.get("full_name")
                      or (email.split("@", 1)[0] if email else "Claude user"))
