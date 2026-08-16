@@ -166,11 +166,44 @@ private func spacedText(_ text: String, font: NSFont, color: NSColor,
     ])
 }
 
-private final class PlanPillLabel: NSTextField {
+// The chip draws its own text instead of wrapping an NSTextField: a text field
+// pins its glyphs to the top of its frame, which left MAX riding the upper edge
+// of the pill. Drawing by hand is the only way to centre it on both axes.
+private final class PlanPillView: NSView {
+    private let text: NSAttributedString
+    private let textWidth: CGFloat
+    private let baselineY: CGFloat
+
+    init(plan: String) {
+        let kern: CGFloat = 0.6
+        let font = NSFont.systemFont(ofSize: 9.5, weight: .bold)
+        text = spacedText(plan.uppercased(), font: font, color: .white, kern: kern)
+        // kerning leaves a trailing gap after the last glyph, so drop it before
+        // centring or the text lands slightly left
+        textWidth = text.size().width - kern
+        // An all-caps plan name has no descender, so centring the font's line
+        // box would leave its empty descender space at the bottom and float the
+        // text toward the top edge. Centre the cap height instead: draw(at:)
+        // takes the bottom of the line box, which sits |descender| below the
+        // baseline, hence the negative term.
+        // A plan name is all caps, so its ink is exactly the cap height: centre
+        // that, not the font's line box, or the box's empty descender space
+        // floats the text toward the top edge. draw(at:) takes the bottom of the
+        // line box, which sits this far below the baseline. Left unrounded so
+        // the result is not quantised away from centre.
+        let lineBottomToBaseline = text.size().height - font.ascender
+        baselineY = (18 - font.capHeight) / 2 - lineBottomToBaseline
+        super.init(frame: NSRect(x: 0, y: 0,
+                                 width: (ceil(textWidth) + 15).rounded(),
+                                 height: 18))
+    }
+
+    required init?(coder: NSCoder) { nil }
+
     override func draw(_ dirtyRect: NSRect) {
         clawdSalmon.setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4).fill()
-        super.draw(dirtyRect)
+        NSBezierPath(roundedRect: bounds, xRadius: 5, yRadius: 5).fill()
+        text.draw(at: NSPoint(x: (bounds.width - textWidth) / 2, y: baselineY))
     }
 }
 
@@ -198,16 +231,10 @@ final class AccountHeaderView: NSView {
 
         var textMaxX: CGFloat = 306
         if account.logged_in, let plan = account.plan, !plan.isEmpty {
-            let pill = PlanPillLabel(labelWithString: "")
-            pill.font = NSFont.systemFont(ofSize: 9.5, weight: .bold)
-            pill.textColor = .white
-            pill.attributedStringValue = spacedText(
-                plan.uppercased(), font: pill.font!, color: .white, kern: 0.4)
-            pill.alignment = .center
-            pill.sizeToFit()
-            let pillWidth = ceil(pill.frame.width) + 10
-            pill.frame = NSRect(x: 306 - pillWidth, y: 21,
-                                width: pillWidth, height: 17)
+            let pill = PlanPillView(plan: plan)
+            // centre the chip on the name line rather than pinning it by its top
+            pill.frame.origin = NSPoint(x: 306 - pill.frame.width,
+                                        y: 29 + (17 - pill.frame.height) / 2)
             addSubview(pill)
             textMaxX = pill.frame.minX - 8
         }
