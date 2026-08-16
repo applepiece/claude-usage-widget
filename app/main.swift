@@ -237,9 +237,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         postAuth(to: loginURL) { [weak self] ok in
             guard let self else { return }
             if ok {
+                // signing in is exactly when identity changes, so the staleness
+                // gate must not hold the old account on screen
+                self.lastAccountFetch = nil
                 self.refresh()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 5) { self.refresh() }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 20) { self.refresh() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                    self.lastAccountFetch = nil
+                    self.refresh()
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+                    self.lastAccountFetch = nil
+                    self.refresh()
+                }
             } else {
                 self.showAuthError("Could not start Claude sign in.")
             }
@@ -266,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         postAuth(to: logoutURL) { [weak self] ok in
             guard let self else { return }
             if ok {
+                self.lastAccountFetch = nil
                 self.account = AccountInfo(logged_in: false)
                 self.latestUsage = nil
                 self.view.signedOut = true
@@ -313,12 +323,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }.resume()
     }
 
+    // Identity changes only at sign in or sign out, so polling it on the same
+    // 60s clock as usage would double this app's API traffic for nothing.
+    private var lastAccountFetch: Date?
+    private let accountMaxAge: TimeInterval = 10 * 60
+
+    private func refreshAccountIfStale() {
+        if let last = lastAccountFetch, Date().timeIntervalSince(last) < accountMaxAge {
+            return
+        }
+        refreshAccount()
+    }
+
     private func refreshAccount() {
         URLSession.shared.dataTask(with: accountURL) { data, _, _ in
             guard let data, let account = try? JSONDecoder().decode(AccountInfo.self, from: data) else {
                 return
             }
             DispatchQueue.main.async {
+                self.lastAccountFetch = Date()
                 self.account = account
                 self.view.signedOut = !account.logged_in
                 if !account.logged_in { self.view.offline = false }
@@ -329,7 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func refresh() {
-        refreshAccount()
+        refreshAccountIfStale()
         URLSession.shared.dataTask(with: apiURL) { data, _, _ in
             DispatchQueue.main.async {
                 guard let data, let u = try? JSONDecoder().decode(Usage.self, from: data) else {
