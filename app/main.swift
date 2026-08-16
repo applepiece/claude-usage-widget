@@ -7,6 +7,9 @@ import ServiceManagement
 let widgetDir = ("~/claude-usage-widget" as NSString).expandingTildeInPath
 let apiURL = URL(string: "http://127.0.0.1:8737/api/usage")!
 let pingURL = URL(string: "http://127.0.0.1:8737/api/ping")!
+let accountURL = URL(string: "http://127.0.0.1:8737/api/account")!
+let loginURL = URL(string: "http://127.0.0.1:8737/api/login")!
+let logoutURL = URL(string: "http://127.0.0.1:8737/api/logout")!
 
 // What the menu-bar status item shows next to the Claw'd glyph.
 enum BarMode: String { case off, five, seven, both }
@@ -18,6 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var failCount = 0
     var lastReset5: String?
     var lastReset7: String?
+    var account = AccountInfo(logged_in: false)
+    var latestUsage: Usage?
 
     var barMode: BarMode {
         get { BarMode(rawValue: UserDefaults.standard.string(forKey: "barMode") ?? "") ?? .five }
@@ -122,7 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func pctText(_ v: (pct: Double, when: String)?) -> String {
-        guard !view.offline, let v else { return "–" }
+        guard !view.offline, !view.signedOut, let v else { return "–" }
         return "\(Int(v.pct.rounded()))%"
     }
 
@@ -158,6 +163,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func buildMenu(minimized: Bool) -> NSMenu {
         let menu = NSMenu()
+        for item in UsageMenuViews.items(account: account, usage: latestUsage) {
+            menu.addItem(item)
+        }
+
+        if !account.logged_in {
+            let signIn = NSMenuItem(title: "Sign In to Claude…",
+                                    action: #selector(startLogin), keyEquivalent: "")
+            signIn.target = self
+            menu.addItem(signIn)
+            menu.addItem(.separator())
+        } else {
+            menu.addItem(.separator())
+        }
+
         if minimized {
             let s = NSMenuItem(title: "Show Widget", action: #selector(restoreFromMenuBar), keyEquivalent: "")
             s.target = self
@@ -167,7 +186,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             m.target = self
             menu.addItem(m)
         }
-        menu.addItem(.separator())
 
         let disp = NSMenuItem(title: "Menu Bar %", action: nil, keyEquivalent: "")
         let sub = NSMenu()
@@ -183,15 +201,100 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         disp.submenu = sub
         menu.addItem(disp)
-        menu.addItem(.separator())
 
         let r = NSMenuItem(title: "Refresh Now", action: #selector(refresh), keyEquivalent: "r")
         r.target = self
         menu.addItem(r)
+        menu.addItem(.separator())
+
+        let settings = NSMenuItem(title: "Usage Settings…",
+                                  action: #selector(openUsageSettings), keyEquivalent: "")
+        settings.target = self
+        menu.addItem(settings)
+        if account.logged_in {
+            let switchAccount = NSMenuItem(title: "Switch Account…",
+                                           action: #selector(startLogin), keyEquivalent: "")
+            switchAccount.target = self
+            menu.addItem(switchAccount)
+            let signOut = NSMenuItem(title: "Sign Out", action: #selector(confirmSignOut),
+                                     keyEquivalent: "")
+            signOut.target = self
+            menu.addItem(signOut)
+        }
+        menu.addItem(.separator())
+
         let q = NSMenuItem(title: "Quit Claude Usage", action: #selector(quit), keyEquivalent: "q")
         q.target = self
         menu.addItem(q)
         return menu
+    }
+
+    @objc func openUsageSettings() {
+        NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!)
+    }
+
+    @objc func startLogin() {
+        postAuth(to: loginURL) { [weak self] ok in
+            guard let self else { return }
+            if ok {
+                self.refresh()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) { self.refresh() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 20) { self.refresh() }
+            } else {
+                self.showAuthError("Could not start Claude sign in.")
+            }
+        }
+    }
+
+    @objc func confirmSignOut() {
+        let email = account.email ?? "the current account"
+        let alert = NSAlert()
+        alert.messageText = "Sign out of Claude Code?"
+        alert.informativeText = "This signs out \(email). The claude CLI on this Mac will need a fresh login."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Sign Out")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].hasDestructiveAction = true
+        alert.buttons[0].keyEquivalent = ""
+        alert.buttons[1].keyEquivalent = "\r"
+        alert.window.defaultButtonCell = alert.buttons[1].cell as? NSButtonCell
+        // accessory apps have no menu-bar focus, so the sheet can open behind
+        // whatever is frontmost unless we take activation first
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        postAuth(to: logoutURL) { [weak self] ok in
+            guard let self else { return }
+            if ok {
+                self.account = AccountInfo(logged_in: false)
+                self.latestUsage = nil
+                self.view.signedOut = true
+                self.view.offline = false
+                self.updateStatusItem()
+                self.view.needsDisplay = true
+                self.refresh()
+            } else {
+                self.showAuthError("Could not sign out of Claude Code.")
+            }
+        }
+    }
+
+    private func postAuth(to url: URL, completion: @escaping (Bool) -> Void) {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("1", forHTTPHeaderField: "X-Widget")
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            DispatchQueue.main.async { completion((200..<300).contains(status)) }
+        }.resume()
+    }
+
+    private func showAuthError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = "Make sure the local usage server and Claude Code are installed."
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     @objc func quit() { NSApp.terminate(nil) }
@@ -210,18 +313,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }.resume()
     }
 
+    private func refreshAccount() {
+        URLSession.shared.dataTask(with: accountURL) { data, _, _ in
+            guard let data, let account = try? JSONDecoder().decode(AccountInfo.self, from: data) else {
+                return
+            }
+            DispatchQueue.main.async {
+                self.account = account
+                self.view.signedOut = !account.logged_in
+                if !account.logged_in { self.view.offline = false }
+                self.updateStatusItem()
+                self.view.needsDisplay = true
+            }
+        }.resume()
+    }
+
     @objc func refresh() {
+        refreshAccount()
         URLSession.shared.dataTask(with: apiURL) { data, _, _ in
             DispatchQueue.main.async {
                 guard let data, let u = try? JSONDecoder().decode(Usage.self, from: data) else {
                     // transient failure: keep the last known values on screen;
                     // only flag offline after 3 misses in a row (~3 min)
                     self.failCount += 1
-                    if self.failCount >= 3 { self.view.offline = true }
+                    if self.failCount >= 3, !self.view.signedOut { self.view.offline = true }
                     self.view.needsDisplay = true
                     return
                 }
                 self.failCount = 0
+                self.latestUsage = u
+
+                if u.logged_in == false {
+                    self.account = AccountInfo(logged_in: false)
+                    self.view.signedOut = true
+                    self.view.offline = false
+                    self.updateStatusItem()
+                    self.view.needsDisplay = true
+                    return
+                }
+                self.view.signedOut = false
 
                 // A limit that just reset can come back with resets_at = null —
                 // that is a fresh window, not a disconnect. Show the pct with
@@ -251,6 +381,99 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }.resume()
     }
+}
+
+final class MenuPreviewCanvas: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+                                xRadius: 8, yRadius: 8)
+        NSColor.windowBackgroundColor.setFill()
+        path.fill()
+        NSColor.separatorColor.setStroke()
+        path.lineWidth = 1
+        path.stroke()
+    }
+}
+
+func renderMenuPreview(path: String, dark: Bool, signedOut: Bool) -> Int32 {
+    _ = NSApplication.shared
+    NSApp.setActivationPolicy(.prohibited)
+    let now = Date()
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    func reset(after seconds: TimeInterval) -> String {
+        formatter.string(from: now.addingTimeInterval(seconds + 60))
+    }
+
+    let account = signedOut
+        ? AccountInfo(logged_in: false)
+        : AccountInfo(logged_in: true, email: "kriengkrai.pho@gmail.com",
+                      name: "heng", plan: "max")
+    let usage = signedOut ? nil : Usage(
+        limits: [
+            LimitInfo(resets_at: reset(after: 3 * 60 * 60), kind: "session",
+                      group: "session", percent: 24),
+            LimitInfo(resets_at: reset(after: 5 * 24 * 60 * 60), kind: "weekly_all",
+                      group: "weekly", percent: 8),
+            LimitInfo(resets_at: reset(after: 5 * 24 * 60 * 60), kind: "weekly_scoped",
+                      group: "weekly", percent: 94,
+                      scope: LimitScope(model: LimitModel(display_name: "Fable"))),
+        ],
+        fetched_at: now.addingTimeInterval(-15).timeIntervalSince1970,
+        logged_in: true)
+    let items = UsageMenuViews.items(account: account, usage: usage, now: now)
+    let padding: CGFloat = 8
+    let height = items.reduce(padding * 2) { $0 + ($1.view?.frame.height ?? 0) }
+    let canvas = MenuPreviewCanvas(frame: NSRect(x: 0, y: 0, width: 336, height: height))
+    canvas.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+
+    var y = height - padding
+    for item in items {
+        guard let view = item.view else { continue }
+        item.view = nil
+        y -= view.frame.height
+        view.frame.origin = NSPoint(x: padding, y: y)
+        view.isHidden = false
+        canvas.addSubview(view)
+    }
+    canvas.layoutSubtreeIfNeeded()
+    guard let bitmap = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds) else {
+        return 1
+    }
+    guard let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return 1 }
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = context
+    canvas.displayIgnoringOpacity(canvas.bounds, in: context)
+    func drawSubviews(of parent: NSView) {
+        for view in parent.subviews where !view.isHidden {
+            NSGraphicsContext.saveGraphicsState()
+            let transform = NSAffineTransform()
+            transform.translateX(by: view.frame.minX, yBy: view.frame.minY)
+            transform.concat()
+            view.displayIgnoringOpacity(view.bounds, in: context)
+            drawSubviews(of: view)
+            NSGraphicsContext.restoreGraphicsState()
+        }
+    }
+    drawSubviews(of: canvas)
+    NSGraphicsContext.restoreGraphicsState()
+    guard let data = bitmap.representation(using: .png, properties: [:]) else {
+        return 1
+    }
+    do {
+        try data.write(to: URL(fileURLWithPath: path))
+        return 0
+    } catch {
+        return 1
+    }
+}
+
+if CommandLine.arguments.count >= 3,
+   CommandLine.arguments[1] == "--preview-menu" {
+    let arguments = Array(CommandLine.arguments.dropFirst(2))
+    exit(renderMenuPreview(path: arguments[0],
+                           dark: arguments.contains("--dark"),
+                           signedOut: arguments.contains("--signed-out")))
 }
 
 let app = NSApplication.shared

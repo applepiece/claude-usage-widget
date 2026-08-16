@@ -54,6 +54,7 @@ codesign --force -s - "$APP"
 
 # --- launch ----------------------------------------------------------------
 pkill -f "Claude Usage.app/Contents/MacOS/ClaudeUsage" 2>/dev/null || true
+pkill -f "claude-usage-widget/server.py" 2>/dev/null || true
 sleep 0.5
 open "$APP"
 echo "==> Done! Claw'd is floating on your screen 🦀"

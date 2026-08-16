@@ -1,12 +1,79 @@
 import Cocoa
 
+let clawdSalmon = NSColor(red: 0.86, green: 0.47, blue: 0.34, alpha: 1)
+let usageOrange = NSColor(red: 0.94, green: 0.50, blue: 0.19, alpha: 1)
+let usagePurple = NSColor(red: 0.68, green: 0.35, blue: 0.78, alpha: 1)
+let usageRed = NSColor(red: 0.94, green: 0.28, blue: 0.44, alpha: 1)
+
+struct LimitModel: Decodable {
+    let display_name: String?
+
+    init(display_name: String? = nil) {
+        self.display_name = display_name
+    }
+}
+
+struct LimitScope: Decodable {
+    let model: LimitModel?
+
+    init(model: LimitModel? = nil) {
+        self.model = model
+    }
+}
+
 struct LimitInfo: Decodable {
     let utilization: Double?
     let resets_at: String?
+    let kind: String?
+    let group: String?
+    let percent: Double?
+    let scope: LimitScope?
+
+    init(utilization: Double? = nil, resets_at: String? = nil,
+         kind: String? = nil, group: String? = nil, percent: Double? = nil,
+         scope: LimitScope? = nil) {
+        self.utilization = utilization
+        self.resets_at = resets_at
+        self.kind = kind
+        self.group = group
+        self.percent = percent
+        self.scope = scope
+    }
 }
+
 struct Usage: Decodable {
     let five_hour: LimitInfo?
     let seven_day: LimitInfo?
+    let limits: [LimitInfo]?
+    let fetched_at: Double?
+    let logged_in: Bool?
+
+    init(five_hour: LimitInfo? = nil, seven_day: LimitInfo? = nil,
+         limits: [LimitInfo]? = nil, fetched_at: Double? = nil,
+         logged_in: Bool? = nil) {
+        self.five_hour = five_hour
+        self.seven_day = seven_day
+        self.limits = limits
+        self.fetched_at = fetched_at
+        self.logged_in = logged_in
+    }
+}
+
+struct AccountInfo: Decodable {
+    let logged_in: Bool
+    let email: String?
+    let name: String?
+    let plan: String?
+    let org: String?
+
+    init(logged_in: Bool, email: String? = nil, name: String? = nil,
+         plan: String? = nil, org: String? = nil) {
+        self.logged_in = logged_in
+        self.email = email
+        self.name = name
+        self.plan = plan
+        self.org = org
+    }
 }
 
 func parseISO(_ s: String) -> Date? {
@@ -52,10 +119,283 @@ func pixelFont(_ size: CGFloat) -> NSFont {
         ?? NSFont.monospacedSystemFont(ofSize: size, weight: .bold)
 }
 
+// Shared geometry keeps the status glyph and account avatar in sync.
+func drawClawdGlyph(in rect: NSRect, color: NSColor,
+                    eyeColor: NSColor? = nil) {
+    let scale = min(rect.width / 20, rect.height / 14)
+    let x0 = rect.midX - 10 * scale
+    let y0 = rect.midY - 7 * scale
+    func fill(_ x: CGFloat, _ y: CGFloat, _ width: CGFloat, _ height: CGFloat) {
+        NSRect(x: x0 + x * scale, y: y0 + y * scale,
+               width: width * scale, height: height * scale).fill()
+    }
+
+    color.setFill()
+    fill(4, 4, 12, 10)
+    fill(1, 8, 3, 3); fill(16, 8, 3, 3)
+    fill(4, 0, 2, 4); fill(7, 0, 2, 4)
+    fill(11, 0, 2, 4); fill(14, 0, 2, 4)
+    if let eyeColor {
+        eyeColor.setFill()
+    } else {
+        NSGraphicsContext.current?.compositingOperation = .clear
+    }
+    fill(6, 10, 2, 2); fill(11, 10, 2, 2)
+    NSGraphicsContext.current?.compositingOperation = .sourceOver
+}
+
+private func menuLabel(_ text: String, size: CGFloat, weight: NSFont.Weight,
+                       color: NSColor) -> NSTextField {
+    let label = NSTextField(labelWithString: text)
+    label.font = NSFont.systemFont(ofSize: size, weight: weight)
+    label.textColor = color
+    label.lineBreakMode = .byTruncatingTail
+    label.maximumNumberOfLines = 1
+    label.cell?.usesSingleLineMode = true
+    return label
+}
+
+private func spacedText(_ text: String, font: NSFont, color: NSColor,
+                        kern: CGFloat) -> NSAttributedString {
+    NSAttributedString(string: text, attributes: [
+        .font: font, .foregroundColor: color, .kern: kern,
+    ])
+}
+
+private final class PlanPillLabel: NSTextField {
+    override func draw(_ dirtyRect: NSRect) {
+        clawdSalmon.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4).fill()
+        super.draw(dirtyRect)
+    }
+}
+
+final class AccountHeaderView: NSView {
+    private let account: AccountInfo
+
+    init(account: AccountInfo) {
+        self.account = account
+        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 58))
+
+        let email = account.email ?? ""
+        let fallbackName = email.split(separator: "@", maxSplits: 1)
+            .first.map(String.init) ?? "Claude user"
+        let knownName = account.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = account.logged_in
+            ? ((knownName?.isEmpty == false ? knownName : nil) ?? fallbackName)
+            : "Not signed in"
+        let detail = account.logged_in ? email : "Sign in to see your usage"
+        let nameLabel = menuLabel(name, size: 13.5, weight: .semibold,
+                                  color: .labelColor)
+        let emailLabel = menuLabel(detail, size: 11.5, weight: .regular,
+                                   color: .secondaryLabelColor)
+        addSubview(nameLabel)
+        addSubview(emailLabel)
+
+        var textMaxX: CGFloat = 306
+        if account.logged_in, let plan = account.plan, !plan.isEmpty {
+            let pill = PlanPillLabel(labelWithString: "")
+            pill.font = NSFont.systemFont(ofSize: 9.5, weight: .bold)
+            pill.textColor = .white
+            pill.attributedStringValue = spacedText(
+                plan.uppercased(), font: pill.font!, color: .white, kern: 0.4)
+            pill.alignment = .center
+            pill.sizeToFit()
+            let pillWidth = ceil(pill.frame.width) + 10
+            pill.frame = NSRect(x: 306 - pillWidth, y: 21,
+                                width: pillWidth, height: 17)
+            addSubview(pill)
+            textMaxX = pill.frame.minX - 8
+        }
+        nameLabel.frame = NSRect(x: 58, y: 29, width: textMaxX - 58, height: 17)
+        emailLabel.frame = NSRect(x: 58, y: 13, width: textMaxX - 58, height: 15)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let avatarColor = account.logged_in ? clawdSalmon : NSColor.tertiaryLabelColor
+        avatarColor.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 14, y: 12, width: 34, height: 34)).fill()
+        drawClawdGlyph(in: NSRect(x: 21, y: 22, width: 20, height: 14),
+                       color: .white, eyeColor: avatarColor)
+
+        // inset hairline: identity above, usage below. Drawn in the view rather
+        // than as a menu separator so the preview renderer shows it too. Signed
+        // out there is no usage section under it, so it would dangle.
+        guard account.logged_in else { return }
+        NSColor.separatorColor.setFill()
+        NSRect(x: 14, y: 0, width: 292, height: 1).fill()
+    }
+}
+
+final class UsageSectionView: NSView {
+    init(freshness: String) {
+        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 22))
+        let font = NSFont.systemFont(ofSize: 10, weight: .semibold)
+        let left = menuLabel("", size: 10, weight: .semibold,
+                             color: .tertiaryLabelColor)
+        left.attributedStringValue = spacedText(
+            "PLAN USAGE LIMITS", font: font, color: .tertiaryLabelColor, kern: 0.6)
+        left.frame = NSRect(x: 14, y: 4, width: 170, height: 14)
+        addSubview(left)
+
+        let right = menuLabel("", size: 10, weight: .semibold,
+                              color: .tertiaryLabelColor)
+        right.attributedStringValue = spacedText(
+            freshness, font: font, color: .tertiaryLabelColor, kern: 0.6)
+        right.sizeToFit()
+        right.frame = NSRect(x: 306 - right.frame.width, y: 4,
+                             width: right.frame.width, height: 14)
+        addSubview(right)
+    }
+
+    required init?(coder: NSCoder) { nil }
+}
+
+final class UsageLimitRowView: NSView {
+    private let limit: LimitInfo
+    private let percent: Double
+
+    init(limit: LimitInfo, now: Date) {
+        self.limit = limit
+        self.percent = limit.percent ?? limit.utilization ?? 0
+        // 44 tall so the bar hugs its own label (5pt) and the next row starts
+        // 16pt away: the pair has to read as one unit, not as evenly spaced lines
+        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 44))
+
+        let label = menuLabel(Self.label(for: limit), size: 12.5,
+                              weight: .regular, color: .labelColor)
+        let pct = Int(percent.rounded())
+        let reset = Self.resetText(limit.resets_at, now: now)
+        let rightText = "\(pct)% · \(reset)"
+        let right = menuLabel("", size: 12, weight: .regular,
+                              color: .secondaryLabelColor)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]
+        let status = NSMutableAttributedString(string: rightText, attributes: attributes)
+        if percent >= 90 {
+            status.addAttribute(.foregroundColor, value: usageRed,
+                                range: NSRange(location: 0, length: "\(pct)%".utf16.count))
+        }
+        right.attributedStringValue = status
+        right.sizeToFit()
+        right.frame = NSRect(x: 306 - right.frame.width, y: 24,
+                             width: right.frame.width, height: 16)
+        label.frame = NSRect(x: 14, y: 24,
+                             width: max(0, right.frame.minX - 22), height: 17)
+        addSubview(label)
+        addSubview(right)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    private static func label(for limit: LimitInfo) -> String {
+        switch limit.kind ?? "" {
+        case "session":
+            return "5-hour limit"
+        case "weekly_all":
+            return "Weekly · all models"
+        case "weekly_scoped":
+            if let name = limit.scope?.model?.display_name, !name.isEmpty {
+                return "Weekly · " + name
+            }
+            return "Weekly · scoped"
+        case let kind where !kind.isEmpty:
+            return kind.replacingOccurrences(of: "_", with: " ").capitalized
+        default:
+            return "Usage limit"
+        }
+    }
+
+    private static func resetText(_ value: String?, now: Date) -> String {
+        guard let value, let date = parseISO(value) else { return "ready" }
+        let remaining = max(0, date.timeIntervalSince(now))
+        if remaining < 60 * 60 {
+            return "resets \(max(1, Int(remaining / 60)))m"
+        }
+        if remaining < 24 * 60 * 60 {
+            return "resets \(max(1, Int(remaining / (60 * 60))))h"
+        }
+        return "resets \(max(1, Int(remaining / (24 * 60 * 60))))d"
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let track = NSRect(x: 14, y: 13, width: 292, height: 6)
+        NSColor.quaternaryLabelColor.setFill()
+        NSBezierPath(roundedRect: track, xRadius: 3, yRadius: 3).fill()
+
+        let clamped = min(100, max(0, percent))
+        guard clamped > 0 else { return }
+        let width = min(track.width, max(6, track.width * CGFloat(clamped) / 100))
+        let color: NSColor
+        if percent >= 90 {
+            color = usageRed
+        } else if limit.group == "session" {
+            color = usageOrange
+        } else {
+            color = usagePurple
+        }
+        color.setFill()
+        NSBezierPath(roundedRect: NSRect(x: track.minX, y: track.minY,
+                                        width: width, height: track.height),
+                     xRadius: 3, yRadius: 3).fill()
+    }
+}
+
+enum UsageMenuViews {
+    static func items(account: AccountInfo, usage: Usage?, now: Date = Date()) -> [NSMenuItem] {
+        var items = [item(with: AccountHeaderView(account: account))]
+        guard account.logged_in else { return items }
+
+        let fetched = usage?.fetched_at.map { Date(timeIntervalSince1970: $0) } ?? now
+        items.append(item(with: UsageSectionView(
+            freshness: freshnessText(since: fetched, now: now))))
+        for limit in limits(from: usage) {
+            items.append(item(with: UsageLimitRowView(limit: limit, now: now)))
+        }
+        return items
+    }
+
+    private static func item(with view: NSView) -> NSMenuItem {
+        let item = NSMenuItem()
+        item.view = view
+        item.isEnabled = false
+        return item
+    }
+
+    private static func freshnessText(since date: Date, now: Date) -> String {
+        let age = max(0, now.timeIntervalSince(date))
+        if age < 60 { return "Updated just now" }
+        if age < 60 * 60 { return "Updated \(Int(age / 60))m ago" }
+        if age < 24 * 60 * 60 { return "Updated \(Int(age / (60 * 60)))h ago" }
+        return "Updated \(Int(age / (24 * 60 * 60)))d ago"
+    }
+
+    private static func limits(from usage: Usage?) -> [LimitInfo] {
+        if let limits = usage?.limits, !limits.isEmpty { return limits }
+        var limits: [LimitInfo] = []
+        if let five = usage?.five_hour {
+            limits.append(LimitInfo(
+                resets_at: five.resets_at, kind: "session", group: "session",
+                percent: five.percent ?? five.utilization))
+        }
+        if let seven = usage?.seven_day {
+            limits.append(LimitInfo(
+                resets_at: seven.resets_at, kind: "weekly_all", group: "weekly",
+                percent: seven.percent ?? seven.utilization))
+        }
+        return limits
+    }
+}
+
 final class WidgetView: NSView {
     var five: (pct: Double, when: String)?
     var seven: (pct: Double, when: String)?
     var offline = true
+    var signedOut = false
     var t: CGFloat = 0            // animation clock (seconds)
     var danceUntil: CGFloat = -1  // celebrate until this clock value
     var nightOverride: Bool?      // preview hook
@@ -101,19 +441,11 @@ final class WidgetView: NSView {
     // it reads large in the bar. The two eyes are punched-through holes.
     static func menuBarIcon() -> NSImage {
         let gw: CGFloat = 20, gh: CGFloat = 14
-        let c: CGFloat = 17.0 / gh          // scale so the image is ~17pt tall
+        let c: CGFloat = 17.0 / gh          // scale so the image is about 17pt tall
         let img = NSImage(size: NSSize(width: gw * c, height: gh * c), flipped: false) { _ in
-            NSColor.black.setFill()
-            func r(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) {
-                NSRect(x: x * c, y: y * c, width: w * c, height: h * c).fill()
-            }
-            r(4, 4, 12, 10)                        // body
-            r(1, 8, 3, 3); r(16, 8, 3, 3)          // straight stub arms
-            r(4, 0, 2, 4); r(7, 0, 2, 4)           // legs (left pair)
-            r(11, 0, 2, 4); r(14, 0, 2, 4)         // legs (right pair)
-            NSGraphicsContext.current?.compositingOperation = .clear
-            r(6, 10, 2, 2); r(11, 10, 2, 2)        // eye holes
-            NSGraphicsContext.current?.compositingOperation = .sourceOver
+            drawClawdGlyph(
+                in: NSRect(x: 0, y: 0, width: gw * c, height: gh * c),
+                color: .black)
             return true
         }
         img.isTemplate = true
@@ -121,8 +453,8 @@ final class WidgetView: NSView {
     }
 
     // Pokemon-ish flat palette (fixed per row: orange = 5H, purple = WK)
-    private let orangeFill = NSColor(red: 0.94, green: 0.50, blue: 0.19, alpha: 1)  // #F08030
-    private let purpleFill = NSColor(red: 0.68, green: 0.35, blue: 0.78, alpha: 1)  // #AE5AC8
+    private let orangeFill = usageOrange
+    private let purpleFill = usagePurple
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
@@ -174,7 +506,7 @@ final class WidgetView: NSView {
         track.setFill()
         notched(box.insetBy(dx: 2, dy: 2), 2)
 
-        if !offline, pct > 0 {
+        if !offline, !signedOut, pct > 0 {
             let inner = box.insetBy(dx: 3, dy: 3)
             let w = max(4, (inner.width * CGFloat(pct) / 100).rounded())
             fill.setFill()
@@ -182,11 +514,11 @@ final class WidgetView: NSView {
         }
 
         let font = pixelFont(8)
-        let when = offline ? "OFFLINE" : (data?.when ?? "-")
+        let when = signedOut ? "SIGN IN" : (offline ? "OFFLINE" : (data?.when ?? "-"))
         (when as NSString).draw(
             at: NSPoint(x: box.minX + 7, y: y + 7),
             withAttributes: [.font: font, .foregroundColor: ink])
-        let ps = (offline ? "-%" : "\(Int(pct.rounded()))%") as NSString
+        let ps = ((offline || signedOut) ? "-%" : "\(Int(pct.rounded()))%") as NSString
         let sz = ps.size(withAttributes: [.font: font])
         ps.draw(at: NSPoint(x: box.maxX - 7 - sz.width, y: y + 7),
                 withAttributes: [.font: font, .foregroundColor: ink])
@@ -206,7 +538,7 @@ final class WidgetView: NSView {
     }
 
     // palette (official salmon + side plane)
-    private let base = NSColor(red: 0.86, green: 0.47, blue: 0.34, alpha: 1)
+    private let base = clawdSalmon
     private let baseHi = NSColor(red: 0.92, green: 0.57, blue: 0.44, alpha: 1)
     private let baseLo = NSColor(red: 0.66, green: 0.32, blue: 0.22, alpha: 1)
     private let side = NSColor(red: 0.74, green: 0.38, blue: 0.27, alpha: 1)

@@ -33,6 +33,16 @@ Claude subscription usage — the 5-hour session limit and the weekly limit — 
 - Auto-starts at login (registered via `SMAppService`; visible in
   System Settings › Login Items).
 
+## Account and usage menu
+
+Right-click the floating Claw'd, or right-click its menu-bar glyph when tucked
+away, to see the same account-aware menu. The header shows the signed-in name,
+email, and plan. Each available plan limit has its own percentage, reset time,
+and colour-coded usage bar. The menu also links to usage settings and can start
+a visible Claude Code sign-in, switch accounts, or sign out after confirmation.
+When no account is signed in, Claw'd shows `SIGN IN` and the menu offers the
+sign-in action first.
+
 ## Install
 
 Requirements: **macOS 13+**, **Xcode Command Line Tools** (`xcode-select --install`),
