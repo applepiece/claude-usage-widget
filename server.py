@@ -32,7 +32,12 @@ _oauth_lock = threading.Lock()
 _cache = {"at": 0.0, "key": None, "data": None}
 _account_lock = threading.Lock()
 _profile_cache = {"at": 0.0, "key": None, "data": None, "ttl": 0.0}
+_backoff = {"until": 0.0, "key": None, "error": None}
 CACHE_SECONDS = 30
+BACKOFF_SECONDS = 30
+# a rate limit needs real quiet to clear, and the widget only refreshes once a
+# minute anyway, so nothing on screen is lost by waiting this long
+RATE_LIMIT_BACKOFF_SECONDS = 5 * 60
 PROFILE_CACHE_SECONDS = 30 * 60
 # a failed lookup must not pin the fallback name for the full half hour, so it
 # is held only briefly and retried once the network is back
@@ -171,6 +176,8 @@ def fetch_account():
 def clear_caches():
     with _lock:
         _cache.update(at=0.0, key=None, data=None)
+        # a fresh sign in deserves an immediate try, not the old account's backoff
+        _backoff.update(until=0.0, key=None, error=None)
     with _account_lock:
         _profile_cache.update(at=0.0, key=None, data=None)
 
@@ -202,6 +209,10 @@ def fetch_usage():
         if (time.time() - _cache["at"] < CACHE_SECONDS
                 and _cache["key"] == cache_key and _cache["data"]):
             return _cache["data"]
+        # Back off after a failure. Without this every caller reaches upstream,
+        # so a 429 keeps being fed by the very requests waiting for it to clear.
+        if time.time() < _backoff["until"] and _backoff["key"] == cache_key:
+            raise _backoff["error"]
         try:
             token = get_access_token()
             req = urllib.request.Request(USAGE_URL, headers=api_headers(token))
@@ -217,13 +228,21 @@ def fetch_usage():
                         raw = json.load(r)
                 else:
                     raise
-        except Exception:
+        except Exception as error:
             # transient failure (keychain race, token rotation, network blip):
             # serve the last good snapshot instead of blanking the widget, but
             # only if it belongs to this account. Otherwise a failed fetch right
             # after a switch would show the previous person's numbers.
             if _cache["data"] and _cache["key"] == cache_key:
                 return _cache["data"]
+            delay = BACKOFF_SECONDS
+            if getattr(error, "code", None) == 429:
+                delay = RATE_LIMIT_BACKOFF_SECONDS
+                try:  # honour Retry-After when the server sends one
+                    delay = max(delay, int(error.headers.get("Retry-After")))
+                except Exception:
+                    pass
+            _backoff.update(until=time.time() + delay, key=cache_key, error=error)
             raise
         data = {
             "five_hour": raw.get("five_hour"),
