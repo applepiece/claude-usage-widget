@@ -341,7 +341,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             DispatchQueue.main.async {
-                self.lastAccountFetch = Date()
+                // a fallback answer (profile lookup failed) must not be pinned
+                // for the full 10 minutes: the server retries after 60s, so let
+                // the next usage tick ask again and heal the header
+                self.lastAccountFetch = (account.profile_ok == false) ? nil : Date()
                 self.account = account
                 self.view.signedOut = !account.logged_in
                 if !account.logged_in { self.view.offline = false }
@@ -367,6 +370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.latestUsage = u
 
                 if u.logged_in == false {
+                    self.lastAccountFetch = nil
                     self.account = AccountInfo(logged_in: false)
                     self.view.signedOut = true
                     self.view.offline = false
@@ -375,6 +379,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 self.view.signedOut = false
+                // usage says signed in while the cached account says otherwise:
+                // somebody logged in outside the app, so re-ask now instead of
+                // showing "Not signed in" until the gate expires
+                if !self.account.logged_in {
+                    self.lastAccountFetch = nil
+                    self.refreshAccount()
+                }
 
                 // A limit that just reset can come back with resets_at = null —
                 // that is a fresh window, not a disconnect. Show the pct with

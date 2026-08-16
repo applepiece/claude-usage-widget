@@ -6,6 +6,7 @@ access token when expired (persisting rotated tokens back to the Keychain, same
 as Claude Code itself does), and proxies the usage endpoint to the widget page.
 Tokens never leave this process and are never logged or sent to the page.
 """
+import hashlib
 import json
 import shlex
 import subprocess
@@ -113,12 +114,17 @@ def local_account():
         pass
 
     email = account.get("emailAddress") or ""
+    # Fingerprint of the live credential, used only as a cache key. ~/.claude.json
+    # can name a different account than the token, so keying the profile cache on
+    # its email would keep serving the previous account's profile after a switch.
+    token = oauth.get("refreshToken") or oauth.get("accessToken") or ""
     return {
         "logged_in": True,
         "email": email,
         "name": email.split("@", 1)[0] if email else "Claude user",
         "plan": oauth.get("subscriptionType"),
         "org": account.get("organizationUuid"),
+        "_fingerprint": hashlib.sha256(token.encode()).hexdigest()[:16],
     }
 
 
@@ -127,7 +133,7 @@ def fetch_account():
     if local is None:
         return {"logged_in": False}
 
-    cache_key = (local.get("email"), local.get("org"))
+    cache_key = local.get("_fingerprint")
     with _account_lock:
         fresh = time.time() - _profile_cache["at"] < _profile_cache["ttl"]
         if fresh and _profile_cache["key"] == cache_key:
@@ -155,6 +161,10 @@ def fetch_account():
     local["name"] = (remote_account.get("full_name")
                      or (email.split("@", 1)[0] if email else "Claude user"))
     local["org"] = organization.get("name") or local.get("org")
+    # profile_ok lets the app retry sooner instead of holding a fallback name
+    # behind its own 10 minute staleness gate
+    local["profile_ok"] = bool(remote_account)
+    local.pop("_fingerprint", None)
     return {key: value for key, value in local.items() if value is not None}
 
 
@@ -187,7 +197,7 @@ def fetch_usage():
             "fetched_at": time.time(),
             "logged_in": False,
         }
-    cache_key = (account.get("email"), account.get("org"))
+    cache_key = account.get("_fingerprint")
     with _lock:
         if (time.time() - _cache["at"] < CACHE_SECONDS
                 and _cache["key"] == cache_key and _cache["data"]):
@@ -209,8 +219,10 @@ def fetch_usage():
                     raise
         except Exception:
             # transient failure (keychain race, token rotation, network blip):
-            # serve the last good snapshot instead of blanking the widget
-            if _cache["data"]:
+            # serve the last good snapshot instead of blanking the widget, but
+            # only if it belongs to this account. Otherwise a failed fetch right
+            # after a switch would show the previous person's numbers.
+            if _cache["data"] and _cache["key"] == cache_key:
                 return _cache["data"]
             raise
         data = {
@@ -240,9 +252,20 @@ class Handler(BaseHTTPRequestHandler):
                    "application/json")
 
     def _allow_widget_post(self):
-        return self.headers.get("X-Widget") == "1" and "Origin" not in self.headers
+        return (self._host_is_local()
+                and self.headers.get("X-Widget") == "1"
+                and "Origin" not in self.headers)
+
+    def _host_is_local(self):
+        # the socket is bound to 127.0.0.1, but a rebound DNS name still resolves
+        # there: without this, a page could read the account email over GET
+        host = (self.headers.get("Host") or "").split(":")[0].strip("[]")
+        return host in ("127.0.0.1", "localhost", "::1", "")
 
     def do_GET(self):
+        if not self._host_is_local():
+            self._json(403, {"error": "forbidden"})
+            return
         path = urlparse(self.path).path
         if path == "/api/ping":
             self._send(200, b'{"ok":true}', "application/json")
@@ -278,7 +301,10 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         parsed = urlparse(self.path)
-        dry = parse_qs(parsed.query).get("dry") == ["1"]
+        # Any mention of dry means dry. Matching the exact list ["1"] failed
+        # open: `?dry=1&dry=1` and `?dry=1&x=y` both parse to something else and
+        # would have run the real logout from a URL that visibly says dry=1.
+        dry = "dry" in parse_qs(parsed.query, keep_blank_values=True)
         if parsed.path == "/api/logout":
             binary = claude_command()
             if binary:
@@ -293,8 +319,11 @@ class Handler(BaseHTTPRequestHandler):
                 })
                 return
             try:
-                subprocess.run(command, check=True, capture_output=True,
-                               text=True, timeout=30)
+                # hold the oauth lock so a refresh cannot be mid-flight and
+                # write the rotated credentials back after logout removed them
+                with _oauth_lock:
+                    subprocess.run(command, check=True, capture_output=True,
+                                   text=True, timeout=30)
                 clear_caches()
                 self._json(200, {"ok": True, "method": method})
             except Exception as error:

@@ -65,14 +65,18 @@ struct AccountInfo: Decodable {
     let name: String?
     let plan: String?
     let org: String?
+    // false when the profile lookup failed, so name/org are local fallbacks and
+    // this answer is worth asking again sooner than the normal staleness gate
+    let profile_ok: Bool?
 
     init(logged_in: Bool, email: String? = nil, name: String? = nil,
-         plan: String? = nil, org: String? = nil) {
+         plan: String? = nil, org: String? = nil, profile_ok: Bool? = nil) {
         self.logged_in = logged_in
         self.email = email
         self.name = name
         self.plan = plan
         self.org = org
+        self.profile_ok = profile_ok
     }
 }
 

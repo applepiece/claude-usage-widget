@@ -13,9 +13,11 @@ if ! xcode-select -p >/dev/null 2>&1 || ! command -v swiftc >/dev/null 2>&1; the
   exit 1
 fi
 if ! security find-generic-password -s "Claude Code-credentials" >/dev/null 2>&1; then
-  echo "!! No Claude Code credentials found in the Keychain."
-  echo "   Log in to Claude Code first (run \`claude\` in a terminal), then re-run."
-  exit 1
+  # a warning, not a failure: the widget now renders a signed-out state and its
+  # menu can start the login itself, so refusing to install here would strand a
+  # signed-out Mac with no way to install the thing that signs it back in
+  echo "!! No Claude Code credentials in the Keychain: installing anyway."
+  echo "   The widget will show \"Not signed in\"; use its menu > Sign In to Claude."
 fi
 
 # --- server files → ~/claude-usage-widget ---------------------------------
@@ -54,8 +56,15 @@ codesign --force -s - "$APP"
 
 # --- launch ----------------------------------------------------------------
 pkill -f "Claude Usage.app/Contents/MacOS/ClaudeUsage" 2>/dev/null || true
+# Kill the old server by the port it holds, not by a path pattern: one started
+# with a relative path shows up in ps as plain "server.py", so pkill -f missed
+# it and the previous build kept serving 8737 through every reinstall.
+SRV_PID="$(lsof -nP -tiTCP:8737 -sTCP:LISTEN 2>/dev/null | head -1 || true)"
+if [ -n "${SRV_PID:-}" ] && ps -p "$SRV_PID" -o args= 2>/dev/null | grep -q "server\.py"; then
+  kill "$SRV_PID" 2>/dev/null || true
+fi
 pkill -f "claude-usage-widget/server.py" 2>/dev/null || true
-sleep 0.5
+sleep 1
 open "$APP"
 echo "==> Done! Claw'd is floating on your screen 🦀"
 echo "    • drag to move · right-click for Refresh / Quit"
