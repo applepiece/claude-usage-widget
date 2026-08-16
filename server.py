@@ -256,8 +256,16 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.dumps(fetch_usage()).encode()
                 self._send(200, body, "application/json")
             except Exception as e:
-                msg = json.dumps({"error": type(e).__name__}).encode()
-                self._send(502, msg, "application/json")
+                # carry the upstream status: a bare "HTTPError" cannot tell an
+                # expired token from a rate limit when diagnosing over ssh
+                detail = {"error": type(e).__name__}
+                code = getattr(e, "code", None)
+                if code is not None:
+                    detail["status"] = code
+                reason = getattr(e, "reason", None)
+                if reason is not None:
+                    detail["reason"] = str(reason)[:120]
+                self._send(502, json.dumps(detail).encode(), "application/json")
         elif path in ("/", "/index.html"):
             html = (DIR / "widget.html").read_bytes()
             self._send(200, html, "text/html; charset=utf-8")
