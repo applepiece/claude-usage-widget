@@ -4,7 +4,7 @@
 import Cocoa
 import ServiceManagement
 
-let widgetDir = ("~/claude-usage-widget" as NSString).expandingTildeInPath
+let widgetDir = ("~/Library/Application Support/claude-usage-widget" as NSString).expandingTildeInPath
 let apiURL = URL(string: "http://127.0.0.1:8737/api/usage")!
 let pingURL = URL(string: "http://127.0.0.1:8737/api/ping")!
 let accountURL = URL(string: "http://127.0.0.1:8737/api/account")!

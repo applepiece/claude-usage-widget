@@ -20,13 +20,19 @@ if ! security find-generic-password -s "Claude Code-credentials" >/dev/null 2>&1
   echo "   The widget will show \"Not signed in\"; use its menu > Sign In to Claude."
 fi
 
-# --- server files → ~/claude-usage-widget ---------------------------------
-DEST="$HOME/claude-usage-widget"
+# --- server files → ~/Library/Application Support/claude-usage-widget ---------------------------------
+DEST="$HOME/Library/Application Support/claude-usage-widget"
 if [ "$(pwd -P)" != "$(cd "$DEST" 2>/dev/null && pwd -P)" ]; then
   echo "==> Installing server to $DEST"
   mkdir -p "$DEST/app/fonts"
   cp server.py "$DEST/"
   cp app/fonts/PressStart2P-Regular.ttf "$DEST/app/fonts/"
+fi
+# The server used to live in ~/claude-usage-widget (until 17 Sep 2026). Remove that
+# copy only when it is the plain install dir, never a git checkout.
+LEGACY="$HOME/claude-usage-widget"
+if [ -d "$LEGACY" ] && [ ! -e "$LEGACY/.git" ] && [ "$(cd "$LEGACY" && pwd -P)" != "$(pwd -P)" ]; then
+  rm -rf "$LEGACY"; echo "==> Removed legacy $LEGACY"
 fi
 
 # --- build the app bundle --------------------------------------------------
