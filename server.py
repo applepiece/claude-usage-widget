@@ -44,6 +44,10 @@ PROFILE_CACHE_SECONDS = 30 * 60
 PROFILE_RETRY_SECONDS = 60
 
 
+class SignedOut(Exception):
+    """The stored credential can no longer produce a token: logged out or revoked."""
+
+
 def keychain_read():
     out = subprocess.run(
         ["security", "find-generic-password", "-s", SERVICE, "-w"],
@@ -63,6 +67,8 @@ def keychain_write(creds):
 
 def refresh_token(creds):
     o = creds["claudeAiOauth"]
+    if not o.get("refreshToken"):
+        raise SignedOut()
     body = json.dumps({
         "grant_type": "refresh_token",
         "refresh_token": o["refreshToken"],
@@ -72,8 +78,15 @@ def refresh_token(creds):
         TOKEN_URL, data=body,
         headers={"Content-Type": "application/json", "User-Agent": UA},
     )
-    with urllib.request.urlopen(req, timeout=20) as r:
-        tok = json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            tok = json.load(r)
+    except urllib.error.HTTPError as error:
+        # 400 invalid_grant / 401 mean the refresh token itself is dead, so no
+        # retry can help: report signed out instead of the last known identity
+        if error.code in (400, 401):
+            raise SignedOut() from error
+        raise
     o["accessToken"] = tok["access_token"]
     if tok.get("refresh_token"):
         o["refreshToken"] = tok["refresh_token"]
@@ -109,6 +122,11 @@ def local_account():
         creds = keychain_read()
         oauth = creds["claudeAiOauth"]
     except Exception:
+        return None
+    # `claude auth logout` empties claudeAiOauth but keeps the Keychain item,
+    # because the MCP OAuth tokens live in it too. Treating that item as signed
+    # in is what put the previous account's email from ~/.claude.json on screen.
+    if not (oauth.get("accessToken") or oauth.get("refreshToken")):
         return None
 
     account = {}
@@ -150,6 +168,9 @@ def fetch_account():
                     PROFILE_URL, headers=api_headers(get_access_token()))
                 with urllib.request.urlopen(req, timeout=20) as response:
                     profile = json.load(response)
+            except SignedOut:
+                _profile_cache.update(at=0.0, key=None, data=None)
+                return {"logged_in": False}
             except Exception:
                 pass
             _profile_cache.update(
@@ -192,18 +213,22 @@ def claude_command():
     return None
 
 
+def signed_out_usage():
+    return {
+        "five_hour": None,
+        "seven_day": None,
+        "limits": None,
+        "fetched_at": time.time(),
+        "logged_in": False,
+    }
+
+
 def fetch_usage():
     account = local_account()
     if account is None:
         with _lock:
             _cache.update(at=0.0, key=None, data=None)
-        return {
-            "five_hour": None,
-            "seven_day": None,
-            "limits": None,
-            "fetched_at": time.time(),
-            "logged_in": False,
-        }
+        return signed_out_usage()
     cache_key = account.get("_fingerprint")
     with _lock:
         if (time.time() - _cache["at"] < CACHE_SECONDS
@@ -228,6 +253,9 @@ def fetch_usage():
                         raw = json.load(r)
                 else:
                     raise
+        except SignedOut:
+            _cache.update(at=0.0, key=None, data=None)
+            return signed_out_usage()
         except Exception as error:
             # transient failure (keychain race, token rotation, network blip):
             # serve the last good snapshot instead of blanking the widget, but
