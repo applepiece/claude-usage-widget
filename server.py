@@ -151,6 +151,11 @@ def local_account():
     }
 
 
+def account_key(fingerprint):
+    """Derive a stable, non-secret key for the app's identity cache."""
+    return hashlib.sha256(("account:" + fingerprint).encode()).hexdigest()[:12]
+
+
 def fetch_account():
     local = local_account()
     if local is None:
@@ -245,7 +250,7 @@ def fetch_usage():
                 with urllib.request.urlopen(req, timeout=20) as r:
                     raw = json.load(r)
             except urllib.error.HTTPError as e:
-                if e.code == 401:  # stale token despite expiresAt — force refresh once
+                if e.code == 401:  # stale token despite expiresAt: force refresh once
                     with _oauth_lock:
                         token = refresh_token(keychain_read())
                     req.headers["Authorization"] = "Bearer " + token
@@ -278,6 +283,7 @@ def fetch_usage():
             "limits": raw.get("limits"),
             "fetched_at": time.time(),
             "logged_in": True,
+            "account_key": account_key(cache_key),
         }
         _cache.update(at=time.time(), key=cache_key, data=data)
         return data

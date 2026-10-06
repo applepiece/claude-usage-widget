@@ -47,15 +47,17 @@ struct Usage: Decodable {
     let limits: [LimitInfo]?
     let fetched_at: Double?
     let logged_in: Bool?
+    let account_key: String?
 
     init(five_hour: LimitInfo? = nil, seven_day: LimitInfo? = nil,
          limits: [LimitInfo]? = nil, fetched_at: Double? = nil,
-         logged_in: Bool? = nil) {
+         logged_in: Bool? = nil, account_key: String? = nil) {
         self.five_hour = five_hour
         self.seven_day = seven_day
         self.limits = limits
         self.fetched_at = fetched_at
         self.logged_in = logged_in
+        self.account_key = account_key
     }
 }
 
@@ -555,7 +557,7 @@ final class WidgetView: NSView {
                 withAttributes: [.font: font, .foregroundColor: ink])
     }
 
-    // ============ Claw'd — 3/4 angled view, hobby poses ============
+    // ============ Claw'd: 3/4 angled view, hobby poses ============
     // Grid 20×20, u=3. Facing front-left: right columns are the darker side plane,
     // back legs shorter+darker for depth. Rows 0-1 = hat/prop headroom.
     private enum Pose { case idle, read, computer, music, camera, cook, sleep, dance }
@@ -585,7 +587,7 @@ final class WidgetView: NSView {
         let ox = 4 + jitter
         let oyTop = 70 + bobBase
 
-        // clickable leg band (below the body) — click to tuck into the menu bar
+        // clickable leg band (below the body): click to tuck into the menu bar
         legHitRect = NSRect(x: ox, y: oyTop - 19 * u, width: 18 * u, height: 7 * u)
 
         func cell(_ gx: Int, _ gy: Int, _ w: Int = 1, _ h: Int = 1, _ c: NSColor) {
@@ -597,11 +599,11 @@ final class WidgetView: NSView {
             NSPoint(x: ox + gx * u, y: oyTop - gy * u)
         }
 
-        // floor shadow (fixed — sells the float)
+        // floor shadow (fixed: sells the float)
         NSColor.black.withAlphaComponent(isDark ? 0.35 : 0.16).setFill()
         NSRect(x: ox + 4 * u, y: 6, width: 12 * u, height: 2).fill()
 
-        // legs — front pair full, back pair shorter + darker (depth)
+        // legs: front pair full, back pair shorter + darker (depth)
         let liftA = (dancing ? Int(t * 4) : Int(sin(t * 3.0) > 0 ? 1 : 0)) % 2
         let liftB = 1 - liftA
         let kick = dancing ? 1 : 0
@@ -703,7 +705,7 @@ final class WidgetView: NSView {
             cell(3, 6 - ((s + 1) % 3), 1, 1, steam)
         }
 
-        // face — eyes sit on the front-left plane (3/4 view)
+        // face: eyes sit on the front-left plane (3/4 view)
         switch mood {
         case 0:
             let blink = t.truncatingRemainder(dividingBy: 3.4) > 3.2

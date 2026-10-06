@@ -1,4 +1,4 @@
-// Claude Usage — tiny always-on-top floating widget (Codex-pets style)
+// Claude Usage: tiny always-on-top floating widget (Codex-pets style)
 // Shows 5-hour + weekly limit bars with reset times, data from the local
 // server.py proxy (which owns OAuth refresh against the real account).
 import Cocoa
@@ -30,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        // single instance — a second launch just exits
+        // single instance: a second launch just exits
         if let bid = Bundle.main.bundleIdentifier {
             let others = NSRunningApplication.runningApplications(withBundleIdentifier: bid)
                 .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
@@ -241,12 +241,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // gate must not hold the old account on screen
                 self.lastAccountFetch = nil
                 self.refresh()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                    self.lastAccountFetch = nil
-                    self.refresh()
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
-                    self.lastAccountFetch = nil
+                self.switchWatch?.invalidate()
+                let initialKey = self.lastAccountKey
+                let deadline = Date().addingTimeInterval(180)
+                // Browser OAuth takes longer than any fixed delay. Usage is
+                // cached 30s per credential, so this adds no upstream traffic
+                // until the key changes.
+                self.switchWatch = Timer.scheduledTimer(withTimeInterval: 5,
+                                                        repeats: true) { [weak self] timer in
+                    guard let self else {
+                        timer.invalidate()
+                        return
+                    }
+                    if Date() >= deadline
+                        || (self.lastAccountKey != nil && self.lastAccountKey != initialKey) {
+                        timer.invalidate()
+                        self.switchWatch = nil
+                        return
+                    }
                     self.refresh()
                 }
             } else {
@@ -326,6 +338,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Identity changes only at sign in or sign out, so polling it on the same
     // 60s clock as usage would double this app's API traffic for nothing.
     private var lastAccountFetch: Date?
+    private var lastAccountKey: String?
+    private var switchWatch: Timer?
     private let accountMaxAge: TimeInterval = 10 * 60
 
     private func refreshAccountIfStale() {
@@ -370,6 +384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.latestUsage = u
 
                 if u.logged_in == false {
+                    self.lastAccountKey = nil
                     self.lastAccountFetch = nil
                     self.account = AccountInfo(logged_in: false)
                     self.view.signedOut = true
@@ -379,15 +394,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 self.view.signedOut = false
-                // usage says signed in while the cached account says otherwise:
-                // somebody logged in outside the app, so re-ask now instead of
-                // showing "Not signed in" until the gate expires
-                if !self.account.logged_in {
+                let keyChanged = u.account_key != nil && self.lastAccountKey != nil
+                    && u.account_key != self.lastAccountKey
+                if let key = u.account_key { self.lastAccountKey = key }
+                // A credential changed under us: switch account, terminal login,
+                // or token rotation. Re-ask instead of waiting for the gate.
+                if keyChanged || !self.account.logged_in {
                     self.lastAccountFetch = nil
                     self.refreshAccount()
                 }
 
-                // A limit that just reset can come back with resets_at = null —
+                // A limit that just reset can come back with resets_at = null:
                 // that is a fresh window, not a disconnect. Show the pct with
                 // "READY" instead of wiping the row.
                 func conv(_ l: LimitInfo?) -> (Double, String)? {
