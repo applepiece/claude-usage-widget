@@ -31,6 +31,21 @@ final class AppModel {
     }
     var machineLogin: UsageAccount? { accounts.first { $0.machineLogin && !$0.isCodex } }
 
+    var shortNames: [String: String] {
+        _ = preferencesRevision
+        return preferences.effectiveShortNames(in: accounts)
+    }
+
+    func customShortName(for id: String) -> String {
+        _ = preferencesRevision
+        return preferences.shortNames[id] ?? ""
+    }
+
+    func setShortName(_ value: String, for id: String) {
+        preferences.setShortName(value, for: id)
+        preferencesRevision += 1
+    }
+
     func makePrimary(_ id: String) {
         preferences.makePrimary(id, in: accounts)
         preferencesRevision += 1

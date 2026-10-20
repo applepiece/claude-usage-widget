@@ -122,24 +122,13 @@
         }
       }
     },
-    "Battery": {
+    "Automatic (%@)": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Battery"
-          }
-        }
-      }
-    },
-    "Both": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Both"
+            "value": "Automatic (%@)"
           }
         }
       }
@@ -276,28 +265,6 @@
         }
       }
     },
-    "Dual Bars": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dual Bars"
-          }
-        }
-      }
-    },
-    "Dual Bars and Ring always show both windows.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dual Bars and Ring always show both windows."
-          }
-        }
-      }
-    },
     "Edu": {
       "extractionState": "manual",
       "localizations": {
@@ -349,17 +316,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "General"
-          }
-        }
-      }
-    },
-    "HP Bar": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "HP Bar"
           }
         }
       }
@@ -507,6 +463,17 @@
         }
       }
     },
+    "Off shows Claw'd alone.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off shows Claw'd alone."
+          }
+        }
+      }
+    },
     "Open Claude usage page": {
       "extractionState": "manual",
       "localizations": {
@@ -540,17 +507,6 @@
         }
       }
     },
-    "Percent": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Percent"
-          }
-        }
-      }
-    },
     "Plus": {
       "extractionState": "manual",
       "localizations": {
@@ -580,17 +536,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Primary and secondary"
-          }
-        }
-      }
-    },
-    "Primary only": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Primary only"
           }
         }
       }
@@ -694,13 +639,13 @@
         }
       }
     },
-    "Ring": {
+    "Same as %@": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ring"
+            "value": "Same as %@"
           }
         }
       }
@@ -749,6 +694,17 @@
         }
       }
     },
+    "Session and weekly": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session and weekly"
+          }
+        }
+      }
+    },
     "Settings…": {
       "extractionState": "manual",
       "localizations": {
@@ -756,6 +712,39 @@
           "stringUnit": {
             "state": "translated",
             "value": "Settings…"
+          }
+        }
+      }
+    },
+    "Short name": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Short name"
+          }
+        }
+      }
+    },
+    "Short name for %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Short name for %@"
+          }
+        }
+      }
+    },
+    "Short name suggestions for %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Short name suggestions for %@"
           }
         }
       }
@@ -793,13 +782,13 @@
         }
       }
     },
-    "Show numbers": {
+    "Show percentage": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Show numbers"
+            "value": "Show percentage"
           }
         }
       }
@@ -921,17 +910,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Stop Using %@ as Secondary"
-          }
-        }
-      }
-    },
-    "Style": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Style"
           }
         }
       }

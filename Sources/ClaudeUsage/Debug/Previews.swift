@@ -29,18 +29,19 @@ func sampleAccounts() -> [UsageAccount] {
 
 @MainActor
 final class PreviewCanvas: NSView {
-    var statusRows: [(String, NSImage)] = []
+    var statusRows: [(String, StatusTitle)] = []
     var transparent = false
     override func draw(_ dirtyRect: NSRect) {
         if !transparent { NSColor.windowBackgroundColor.setFill(); bounds.fill() }
         for (index, row) in statusRows.enumerated() {
             let y = bounds.height - CGFloat(index + 1) * 32
             NSColor.controlBackgroundColor.setFill()
-            NSRect(x: 0, y: y, width: bounds.width, height: 30).fill()
+            NSRect(x: 0, y: y + 4, width: bounds.width, height: 24).fill()
             (row.0 as NSString).draw(at: NSPoint(x: 10, y: y + 8),
                                    withAttributes: [.font: NSFont.systemFont(ofSize: 11),
                                                     .foregroundColor: NSColor.labelColor])
-            row.1.draw(in: NSRect(x: 190, y: y + 4, width: row.1.size.width, height: 22))
+            StatusRenderer.drawPreview(row.1, in: NSRect(x: 220, y: y + 4,
+                                                       width: StatusRenderer.previewSize(row.1).width, height: 24))
         }
     }
 }
@@ -82,23 +83,22 @@ func renderPreview(kind: String, path: String, dark: Bool, signedOut: Bool, two:
     let canvas: PreviewCanvas
     switch kind {
     case "--preview-statusbar":
-        canvas = PreviewCanvas(frame: NSRect(x: 0, y: 0, width: 370, height: 17 * 32))
-        for style in BarStyle.allCases {
-            for mode in BarAccounts.allCases {
+        canvas = PreviewCanvas(frame: NSRect(x: 0, y: 0, width: 580, height: 16 * 32))
+        let names = AccountShortNames.effective(in: samples, custom: [:])
+        for mode in BarAccounts.allCases {
+            for metric in BarMetric.allCases {
                 let shown: [UsageAccount] = mode == .all ? samples : (mode == .primarySecondary ? [samples[0], samples[3]] : [samples[0]])
-                let image = StatusRenderer.image(accounts: shown, tags: accountTags(samples),
-                                                 style: style, metric: .max, numbers: true, appearance: appearance)
-                canvas.statusRows.append((style.rawValue + " · " + mode.rawValue, image))
+                let title = StatusTitle(accounts: shown, shortNames: names, metric: metric, numbers: true)
+                canvas.statusRows.append((mode.rawValue + " · " + metric.rawValue, title))
             }
         }
         var error = samples[0]; error.state = .tokenRejected
-        canvas.statusRows.append(("battery · token rejected", StatusRenderer.image(
-            accounts: [error], tags: accountTags(samples), style: .battery, metric: .max,
-            numbers: true, appearance: appearance)))
+        canvas.statusRows.append(("token rejected", StatusTitle(accounts: [error], shortNames: names)))
         var rejected = samples; rejected[4].state = .tokenRejected
-        canvas.statusRows.append(("battery · all · codex rejected", StatusRenderer.image(
-            accounts: rejected, tags: accountTags(samples), style: .battery, metric: .max,
-            numbers: true, appearance: appearance)))
+        canvas.statusRows.append(("all · codex rejected", StatusTitle(accounts: rejected, shortNames: names)))
+        canvas.statusRows.append(("six Thai characters", StatusTitle(
+            accounts: [samples[0]], shortNames: ["pho": "กิขีคุฆูง่จ้"])))
+        canvas.statusRows.append(("percentage off", StatusTitle(accounts: samples, numbers: false)))
     case "--preview-widget":
         canvas = PreviewCanvas(frame: NSRect(x: 0, y: 0, width: 216, height: two ? 148 : 74))
         canvas.transparent = true

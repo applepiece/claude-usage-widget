@@ -102,21 +102,26 @@ struct UsageKitTests {
         }
         for name in [NSAppearance.Name.aqua, .darkAqua] {
             let appearance = try #require(NSAppearance(named: name))
-            for style in BarStyle.allCases {
-                for metric in BarMetric.allCases {
-                    for numbers in [false, true] {
-                        for unavailable in [false, true] {
-                            var sample = accounts
-                            if unavailable {
-                                sample[0].state = .tokenRejected
-                                sample[4].sevenDay = nil
-                            }
-                            let image = StatusRenderer.image(accounts: sample, tags: accountTags(sample),
-                                                             style: style, metric: metric, numbers: numbers,
-                                                             appearance: appearance)
-                            #expect(image.size.width < 160)
-                            #expect(image.size.height == 22)
+            for metric in BarMetric.allCases {
+                for numbers in [false, true] {
+                    for unavailable in [false, true] {
+                        var sample = accounts
+                        if unavailable {
+                            sample[0].state = .tokenRejected
+                            sample[4].sevenDay = nil
                         }
+                        let title = StatusTitle(accounts: sample, metric: metric, numbers: numbers)
+                        let text = StatusRenderer.attributedTitle(title)
+                        let image = StatusRenderer.previewImage(title, appearance: appearance)
+                        #expect(title.string.count <= 28)
+                        #expect(text.string == title.string)
+                        #expect(image.size.width < 160)
+                        #expect(image.size.width >= 24 + ceil(text.size().width))
+                        #expect(image.size.height == 24)
+                        #expect(numbers ? !title.string.isEmpty : title.string.isEmpty)
+                        let glyph = StatusRenderer.glyph()
+                        #expect(glyph.isTemplate)
+                        #expect(glyph.size == NSSize(width: 24, height: 17))
                     }
                 }
             }

@@ -80,68 +80,33 @@ private struct GeneralSettings: View {
 private struct MenuBarSettings: View {
     let model: AppModel
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("barStyle") private var style = "battery"
     @AppStorage("barAccounts") private var accounts = "primary"
     @AppStorage("barMetric") private var metric = "max"
     @AppStorage("barNumbers") private var numbers = true
     @AppStorage("menuBarAlways") private var always = true
 
-    private var showsBoth: Bool { style == "dual" || style == "ring" }
     private var appearance: NSAppearance { NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua) ?? NSApp.effectiveAppearance }
     private var shownAccounts: [UsageAccount] {
         if accounts == "all" { return model.accounts }
         return [model.primary, accounts == "primarySecondary" ? model.secondary : nil].compactMap { $0 }
     }
-    private func image(_ sampleStyle: BarStyle, preview: Bool) -> NSImage {
-        StatusRenderer.image(accounts: preview ? shownAccounts : [model.primary].compactMap { $0 },
-                             tags: accountTags(model.accounts), style: sampleStyle,
-                             metric: BarMetric(rawValue: metric) ?? .max, numbers: numbers, appearance: appearance)
-    }
-    private func title(_ style: BarStyle) -> String {
-        switch style {
-        case .percent: String(localized: "Percent")
-        case .battery: String(localized: "Battery")
-        case .hp: String(localized: "HP Bar")
-        case .dual: String(localized: "Dual Bars")
-        case .ring: String(localized: "Ring")
-        }
+    private var title: StatusTitle {
+        StatusTitle(accounts: shownAccounts, shortNames: model.shortNames,
+                    metric: BarMetric(rawValue: metric) ?? .max, numbers: numbers)
     }
 
     var body: some View {
         Form {
             Section {
-                Image(nsImage: image(BarStyle(rawValue: style) ?? .battery, preview: true))
-                    .frame(maxWidth: .infinity).frame(height: 28)
-                    .background(Color(nsColor: .windowBackgroundColor), in: ButtonBorderShape.roundedRectangle)
+                Image(nsImage: StatusRenderer.previewImage(title, appearance: appearance))
+                    .frame(maxWidth: .infinity).frame(height: 24)
+                    .background(Color(nsColor: .windowBackgroundColor))
                     .accessibilityLabel(Text("Menu bar preview"))
-                    .accessibilityValue(Text(verbatim: shownAccounts.map { MenuFormatting.accountSubtitle($0, now: Date()) }.joined(separator: ", ")))
+                    .accessibilityValue(Text(verbatim: title.accessibilityLabel))
             }.measureSettingsSection()
             Section {
-                HStack(spacing: 8) {
-                    ForEach(BarStyle.allCases, id: \.rawValue) { candidate in
-                        Button { style = candidate.rawValue } label: {
-                            VStack(spacing: 4) {
-                                Image(nsImage: image(candidate, preview: false)).accessibilityHidden(true)
-                                Text(title(candidate)).font(.caption)
-                                    .foregroundStyle(style == candidate.rawValue ? Color.accentColor : .primary)
-                            }
-                            .frame(width: 80, height: 56)
-                            .contentShape(ButtonBorderShape.roundedRectangle)
-                            .overlay(ButtonBorderShape.roundedRectangle
-                                .strokeBorder(style == candidate.rawValue ? Color.accentColor : .clear, lineWidth: 2))
-                        }
-                        .buttonStyle(.plain)
-                        .focusable()
-                        .accessibilityLabel(Text(title(candidate)))
-                        .accessibilityAddTraits(style == candidate.rawValue ? .isSelected : [])
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
-            } header: { Text("Style").measureSettingsSection() }.measureSettingsSection()
-            Section {
-                Picker("Accounts", selection: $accounts) {
-                    Text("Primary only").tag("primary")
+                Picker("Show", selection: $accounts) {
+                    Text("Primary account").tag("primary")
                     Text("Primary and secondary").tag("primarySecondary")
                     Text("All accounts").tag("all")
                 }.pickerStyle(.menu)
@@ -149,12 +114,12 @@ private struct MenuBarSettings: View {
                     Text("Most used").tag("max")
                     Text("Session").tag("five")
                     Text("Weekly").tag("seven")
-                    Text("Both").tag("both")
-                }.pickerStyle(.menu).disabled(showsBoth)
-                if showsBoth {
-                    Text("Dual Bars and Ring always show both windows.").font(.caption).foregroundStyle(.secondary)
+                    Text("Session and weekly").tag("both")
+                }.pickerStyle(.menu)
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Show percentage", isOn: $numbers)
+                    Text("Off shows Claw'd alone.").font(.caption).foregroundStyle(.secondary)
                 }
-                Toggle("Show numbers", isOn: $numbers)
                 Toggle("Keep icon in the menu bar", isOn: $always)
             } footer: {
                 Text("When off, the icon appears only while the widget is tucked away.").measureSettingsSection()
@@ -171,7 +136,8 @@ private struct AccountsSettings: View {
     @AppStorage("secondaryAccount") private var secondary = "none"
 
     private func identity(_ account: UsageAccount) -> String {
-        [account.label, account.providerName, account.email].compactMap { $0 }.joined(separator: " · ")
+        [model.shortNames[account.id], account.label, account.providerName, account.email]
+            .compactMap { $0 }.joined(separator: " · ")
     }
 
     var body: some View {
@@ -194,7 +160,7 @@ private struct AccountsSettings: View {
             }.measureSettingsSection()
             if !model.accounts.isEmpty {
                 Section {
-                    ForEach(model.accounts, id: \.id) { AccountSettingsRow(account: $0) }
+                    ForEach(model.accounts, id: \.id) { AccountSettingsRow(account: $0, model: model) }
                 }.measureSettingsSection()
             }
             Section {
@@ -222,6 +188,16 @@ private struct AccountsSettings: View {
 @MainActor
 private struct AccountSettingsRow: View {
     let account: UsageAccount
+    let model: AppModel
+    private var automaticName: String { accountTags(model.accounts)[account.id] ?? "?" }
+    private var duplicate: UsageAccount? {
+        model.accounts.first { $0.id != account.id && model.shortNames[$0.id] == model.shortNames[account.id] }
+    }
+    private var suggestions: [String] {
+        var values = [account.label, account.label.uppercased(), String(account.label.prefix(2)).uppercased()]
+        if account.isCodex { values.append("›" + account.label.uppercased()) }
+        return values
+    }
     private var status: String {
         switch account.state {
         case .ok: String(localized: "Up to date")
@@ -258,6 +234,42 @@ private struct AccountSettingsRow: View {
                 HStack(spacing: 4) {
                     Circle().fill(statusColor).frame(width: 6, height: 6).accessibilityHidden(true)
                     Text(status).font(.caption)
+                }
+            }
+            HStack(alignment: .top, spacing: 8) {
+                Text("Short name").padding(.top, 3)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 4) {
+                        // An explicit prompt plus hidden label keeps the automatic tag inside
+                        // the field as placeholder text; a grouped Form otherwise shows the title as a row label.
+                        TextField(text: Binding(get: {
+                            model.customShortName(for: account.id)
+                        }, set: { model.setShortName($0, for: account.id) }), prompt: Text(verbatim: automaticName)) {
+                            Text("Short name for \(account.label)")
+                        }
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 72)
+                        .accessibilityLabel(Text("Short name for \(account.label)"))
+                        Menu {
+                            Button("Automatic (\(automaticName))") { model.setShortName("", for: account.id) }
+                            ForEach(Array(suggestions.enumerated()), id: \.offset) { _, suggestion in
+                                Button { model.setShortName(suggestion, for: account.id) } label: {
+                                    Text(verbatim: suggestion)
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "chevron.down")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .accessibilityLabel(Text("Short name suggestions for \(account.label)"))
+                    }
+                    if let duplicate {
+                        Text("Same as \(duplicate.label)").font(.caption)
+                            .foregroundStyle(Color(nsColor: .systemOrange))
+                    }
                 }
             }
             if account.state == .tokenRejected {

@@ -82,8 +82,8 @@ Settings has four tabs:
 | Tab | Controls |
 | --- | --- |
 | General | Launch at login, off until enabled by the user; desktop widget options. |
-| Menu Bar | Live preview; Percent, Battery, HP Bar, Dual Bars, or Ring; accounts shown; value; Show Numbers; Keep Icon in Menu Bar. |
-| Accounts | Primary and secondary accounts; status and renewal commands; this Mac's Claude Code sign in, switch account and sign out; provider usage page links. |
+| Menu Bar | Live preview; accounts shown; value; Show percentage; Keep icon in the menu bar. |
+| Accounts | Primary and secondary accounts; editable short names; status and renewal commands; this Mac's Claude Code sign in, switch account and sign out; provider usage page links. |
 | About | Version and credits. |
 
 The primary account initially uses this Mac's login, otherwise the first
@@ -92,35 +92,35 @@ the current secondary as primary swaps them. The widget can show Primary only
 or Primary + Secondary. A second account adds tagged bars. Claw'd's mood follows
 primary usage; reset celebrations and offline state are tracked per account.
 
-Menu bar accounts can be **Primary only** (default), **Primary + Secondary**, or
-**All Accounts**. Tags expand to two letters when initials collide. Styles:
+The menu bar shows a monochrome Claw'd followed by each account's short name
+and percent used, including when only one account is shown: **P 85%**.
+**Show** can be **Primary account** (default), **Primary and secondary**, or
+**All accounts**. **Value** can be **Most used** (default: the higher available
+percentage), **Session**, **Weekly**, or **Session and weekly** (such as **P 15·85**).
+Missing data shows **–** and failed accounts show **!**.
 
-| Style | Display |
-| --- | --- |
-| Percent | Text showing percent used. |
-| Battery | Default; fill shows capacity left. |
-| HP Bar | Ten pixel segments showing capacity left, rounded up. |
-| Dual Bars | 5-hour above weekly; fill shows percent used. |
-| Ring | Outer 5-hour and inner weekly rings; fill shows percent used. |
-
-**Value** can be 5-Hour, Weekly, Both, or Most Used (default: the higher available
-percentage). Dual Bars and Ring always show both windows. **Show Numbers** is
-on by default. Numbers mean percent **used**, including on Battery and HP Bar.
-Green means below 70%, amber 70–89%, and red 90%+. Missing data shows **–**;
-errors show **!** without fill.
-
-Spacing shrinks and numbers drop as needed to keep the status image below
-160 points. Percent first drops % signs, then shows each account's highest
-window. Percent with Show Numbers off gives an icon-only status item.
-**Keep Icon in Menu Bar** is on by default; turn it off to show the status item
+Titles longer than 28 characters first drop percentage signs, then use each
+account's highest window. If still too long, only the first account and **+N**
+remain, where N is the number of hidden accounts. **Show percentage** is on by
+default; turning it off shows Claw'd alone. Text follows the native menu bar's
+light/dark appearance. **Keep icon in the menu bar** is on by default; turn it off to show the status item
 only while the widget is minimized.
+
+In **Settings > Accounts**, type a **Short name** or pick one from the arrow
+menu: Automatic, the account label, its uppercase form, its first two letters
+uppercased, or a Codex label prefixed with **›**. Edits update the menu bar live.
+Names allow any characters, with a six-character limit that preserves Thai and
+emoji. Empty or whitespace-only names use the automatic tag; matching names
+show an orange **Same as kkpk** caption. Automatic tags expand when initials
+collide. Short names also appear in account pickers and on the stacked widget's
+account tags. They do not rename the accounts.
 
 **Refresh** requests all accounts with guarded `POST /api/refresh?account=<id>`.
 Snapshots younger than 60 seconds and failure backoffs prevent repeated probes.
 Settings account actions affect only this Mac's Claude Code login. Sign out
 asks for confirmation. Sign in starts a visible `claude auth login` in Terminal.
 Bridge token files remain unchanged. Old `barMode` preferences migrate once:
-Off becomes Percent with numbers hidden; 5-Hour/Weekly/Both becomes the
+Off becomes Claw'd alone; 5-Hour/Weekly/Both becomes the
 corresponding value selection.
 
 ## Multiple accounts
@@ -365,8 +365,9 @@ contacting the server. Build the app first. Output stays under ignored `.build`:
 
 Menu samples: pho 15%/82% (machine login), kkpk 0%/37%, mahidol 4%/no weekly,
 Codex pro no 5-hour/12% weekly, and Codex edu 1%/0%. Menu and two-account widget
-previews select pho and codex-pro. The status grid covers every style and
-accounts mode with all five samples, plus rejected Claude and Codex accounts.
+previews select pho and codex-pro. The status grid covers every Show × Value
+combination, rejected Claude and Codex accounts, a six-character Thai short
+name, and Claw'd alone.
 All three preview modes support `--dark`; the widget supports `--two` and the
 menu supports `--signed-out`. Visual QA is separate from compilation. Run
 `bash tests/preview_checks.sh` outside the sandbox and inspect `.build/previews/`
@@ -400,21 +401,24 @@ Settings แบ่งเป็น 4 แท็บ:
 
 - **General**: เปิดตอน login macOS เมื่อผู้ใช้เลือกเองเท่านั้น ค่าเริ่มต้นปิด
   พร้อมตัวเลือก desktop widget และแสดงบัญชีหลักหรือบัญชีหลักพร้อมบัญชีรอง
-- **Menu Bar**: preview สด พร้อม Percent / Battery (ค่าเริ่มต้น) / HP Bar /
-  Dual Bars / Ring เลือก Accounts เป็น Primary only / Primary + Secondary /
-  All Accounts และ Value เป็น 5-Hour / Weekly / Both / Most Used
-  (ค่าเริ่มต้น เลือกค่าสูงสุด) มี Show Numbers และ Keep Icon in Menu Bar
+- **Menu Bar**: preview สด แสดง Claw'd สีเดียวพร้อมชื่อย่อและเปอร์เซ็นต์
+  เลือก Show เป็น Primary account / Primary and secondary / All accounts
+  และ Value เป็น Most used (ค่าเริ่มต้น เลือกค่าสูงสุด) / Session / Weekly /
+  Session and weekly มี Show percentage และ Keep icon in the menu bar
 - **Accounts**: เลือกบัญชีหลักและรอง ดูสถานะ คำสั่งต่ออายุ และลิงก์ usage
+  ตั้ง Short name ได้โดยพิมพ์หรือเลือกจากเมนูลูกศร จำกัด 6 ตัวอักษร รองรับไทยและ emoji
+  เว้นว่างเพื่อใช้ชื่อย่ออัตโนมัติ ชื่อซ้ำมีข้อความสีส้ม Same as ตามด้วยชื่อบัญชี
+  ชื่อย่อเปลี่ยนบน menu bar ทันที รวมถึงรายการเลือกบัญชีและป้าย widget แบบสองบัญชี
   พร้อม sign in / switch / sign out ของ Claude Code บน Mac นี้
   sign out ยืนยันก่อนและไม่แก้ token ของบัญชี bridge
 - **About**: ข้อมูลเวอร์ชันและเครดิต
 
-Battery และ HP แสดงพลังที่เหลือ แต่ตัวเลขแสดงเปอร์เซ็นต์ที่ใช้ไป
-Dual Bars และ Ring แสดงทั้งรอบ 5 ชั่วโมงและรายสัปดาห์เสมอ
-Show Numbers เปิดเป็นค่าเริ่มต้น สีเขียวเมื่อใช้ต่ำกว่า 70%, เหลือง 70–89%,
-แดงตั้งแต่ 90%; ข้อมูลหายเป็น **–**, ข้อผิดพลาดเป็น **!** และไม่มีแถบเติม
-ลดระยะห่างและซ่อนตัวเลขเมื่อพื้นที่ไม่พอ โหมด Percent ตัดเครื่องหมาย % ก่อน
-แล้วแสดงรอบที่ใช้มากสุด หากปิดตัวเลขจะเหลือไอคอนอย่างเดียว
+ชื่อย่อแสดงเสมอแม้มีบัญชีเดียว เช่น **P 85%** ตัวเลขคือเปอร์เซ็นต์ที่ใช้ไป
+Session and weekly แสดงเช่น **P 15·85** ข้อมูลหายเป็น **–** ข้อผิดพลาดเป็น **!**
+Show percentage เปิดเป็นค่าเริ่มต้น ปิดแล้วเหลือ Claw'd อย่างเดียว
+เมื่อข้อความยาวเกิน 28 ตัวอักษร จะตัดเครื่องหมาย % ก่อน แล้วใช้รอบที่ใช้มากสุด
+หากยังยาวเกิน จะแสดงเฉพาะบัญชีแรกพร้อม **+N** บอกจำนวนบัญชีที่ซ่อน
+สีของไอคอนและข้อความปรับตาม menu bar สว่างหรือมืดของระบบ
 
 Keep Icon in Menu Bar เปิดเป็นค่าเริ่มต้น ปิดเพื่อแสดงเฉพาะเมื่อย่อ widget
 บัญชีรองทำให้ widget ขยายพร้อมป้ายชื่อย่อ แถบส้มคือ 5 ชั่วโมง แถบม่วงคือรายสัปดาห์

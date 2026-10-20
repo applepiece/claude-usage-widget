@@ -216,14 +216,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         guard let button = statusItem?.button else { return }
-        button.title = ""
-        button.image = StatusRenderer.image(accounts: preferences.shown(in: accounts), tags: accountTags(accounts),
-                                             style: preferences.style, metric: preferences.metric,
-                                             numbers: preferences.numbers, appearance: button.effectiveAppearance)
+        let title = StatusTitle(accounts: preferences.shown(in: accounts),
+                                shortNames: preferences.effectiveShortNames(in: accounts),
+                                metric: preferences.metric, numbers: preferences.numbers)
+        button.image = StatusRenderer.glyph()
+        button.imagePosition = .imageLeading
+        button.attributedTitle = StatusRenderer.attributedTitle(title)
         button.toolTip = accounts.isEmpty ? "Claude Usage · No accounts" : preferences.shown(in: accounts).map {
             "\($0.label) · \($0.providerName): 5H \(percentage($0.fiveHour)), WK \(percentage($0.sevenDay)) · \($0.rawState)"
         }.joined(separator: "\n")
-        button.setAccessibilityLabel(button.toolTip)
+        button.setAccessibilityLabel(title.accessibilityLabel)
     }
 
     func updateUI() {
@@ -243,7 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         view.frame = NSRect(x: 0, y: height - 74, width: 216, height: 74)
         secondaryView.frame = NSRect(x: 0, y: 0, width: 216, height: 74)
         secondaryView.isHidden = secondary == nil
-        let tags = accountTags(accounts)
+        let tags = preferences.effectiveShortNames(in: accounts)
         func apply(_ account: UsageAccount?, to widget: WidgetView) {
             widget.accountTag = secondary == nil ? "" : (account.flatMap { tags[$0.id] } ?? "")
             widget.signedOut = account == nil

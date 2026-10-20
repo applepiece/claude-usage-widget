@@ -38,7 +38,9 @@ for appearance in light dark; do
         capture "settings-$tab-$appearance" --qa-appearance "$appearance" --qa-open "settings-$tab" --qa-defaults secondaryAccount=codex-pro
     done
     capture "accounts-renewal-$appearance" --qa-state rejected --qa-appearance "$appearance" --qa-open settings-accounts
-    capture "menubar-both-$appearance" --qa-appearance "$appearance" --qa-open settings-menubar --qa-defaults barStyle=dual --qa-defaults barAccounts=primarySecondary --qa-defaults secondaryAccount=codex-pro
+    capture "menubar-both-$appearance" --qa-appearance "$appearance" --qa-open settings-menubar --qa-defaults barMetric=both --qa-defaults barAccounts=primarySecondary --qa-defaults secondaryAccount=codex-pro --qa-defaults 'accountShortNames={"pho":"pho","codex-pro":"›PRO"}'
+    capture "accounts-short-names-$appearance" --qa-appearance "$appearance" --qa-open settings-accounts --qa-defaults 'accountShortNames={"pho":"pho","kkpk":"pho","codex-pro":"›PRO","mahidol":"กิขีคุฆูง่จ้"}'
+    capture "menubar-icon-only-$appearance" --qa-appearance "$appearance" --qa-open settings-menubar --qa-defaults barNumbers=false
     capture "menu-codex-$appearance" --qa-appearance "$appearance" --qa-open menu --qa-defaults primaryAccount=codex-pro --qa-defaults secondaryAccount=pho
     capture "accounts-signedout-$appearance" --qa-state signedout --qa-appearance "$appearance" --qa-open settings-accounts
  done

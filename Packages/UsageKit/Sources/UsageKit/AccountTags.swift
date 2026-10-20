@@ -31,3 +31,17 @@ public func accountTags(_ accounts: [UsageAccount]) -> [String: String] {
     return tags
 }
 
+public enum AccountShortNames {
+    /// Limit by extended grapheme clusters, preserving Thai marks and emoji.
+    public static func trimmed(_ value: String) -> String {
+        String(value.trimmingCharacters(in: .whitespacesAndNewlines).prefix(6))
+    }
+
+    public static func effective(in accounts: [UsageAccount], custom: [String: String]) -> [String: String] {
+        let automatic = accountTags(accounts)
+        return Dictionary(uniqueKeysWithValues: accounts.map { account in
+            let name = trimmed(custom[account.id] ?? "")
+            return (account.id, name.isEmpty ? (automatic[account.id] ?? "?") : name)
+        })
+    }
+}

@@ -45,7 +45,6 @@ private func menuLabel(_ text: String, size: CGFloat, weight: NSFont.Weight = .r
 final class AccountHeaderView: NSView {
     private let avatar: NSImage
     private let plan: String?
-    private let accent: NSColor
     private let status: String?
     private let statusColor: NSColor
     private let statusSymbol: String
@@ -53,7 +52,6 @@ final class AccountHeaderView: NSView {
     init(account: UsageAccount?, now: Date = Date()) {
         avatar = accountAvatar(account, size: 32)
         plan = MenuFormatting.planTitle(account?.plan)
-        accent = account.map { providerAccent($0.provider) } ?? .tertiaryLabelColor
         switch account?.state {
         case .stale:
             status = MenuFormatting.updated(since: account.flatMap(MenuFormatting.timestamp), now: now)
@@ -72,21 +70,22 @@ final class AccountHeaderView: NSView {
             statusColor = .secondaryLabelColor
             statusSymbol = ""
         }
-        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: status == nil ? 52 : 68))
-        let extra: CGFloat = status == nil ? 0 : 16
+        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: status == nil ? 44 : 69))
+        // Preserve the existing 10pt gap above a 15pt status line.
+        let extra: CGFloat = status == nil ? 0 : 25
         let name = account?.label ?? String(localized: "No accounts")
         let detail = account == nil ? String(localized: "Sign in to Claude Code to see your usage") : account?.email ?? ""
         let nameLabel = menuLabel(name, size: 13, weight: .semibold)
-        let tagWidth = plan.map { Self.tagText($0, color: accent).size().width + 12 } ?? 0
-        nameLabel.frame = NSRect(x: 56, y: 28 + extra, width: 230 - (plan == nil ? 0 : tagWidth + 8), height: 17)
+        let tagWidth = plan.map { ceil(Self.tagText($0).size().width) + 14 } ?? 0
+        nameLabel.frame = NSRect(x: 56, y: 20 + extra, width: 230 - (plan == nil ? 0 : tagWidth + 8), height: 17)
         addSubview(nameLabel)
         let email = menuLabel(detail, size: 11, color: .secondaryLabelColor)
         email.lineBreakMode = .byTruncatingMiddle
-        email.frame = NSRect(x: 56, y: 12 + extra, width: 230, height: 15)
+        email.frame = NSRect(x: 56, y: 4 + extra, width: 230, height: 15)
         addSubview(email)
         if let status {
             let label = menuLabel(status, size: 11, color: statusColor)
-            label.frame = NSRect(x: 30, y: 3, width: 256, height: 15)
+            label.frame = NSRect(x: 30, y: 4, width: 256, height: 15)
             addSubview(label)
         }
         setAccessibilityElement(true)
@@ -98,27 +97,27 @@ final class AccountHeaderView: NSView {
 
     required init?(coder: NSCoder) { nil }
 
-    private static func tagText(_ plan: String, color: NSColor) -> NSAttributedString {
+    private static func tagText(_ plan: String) -> NSAttributedString {
         NSAttributedString(string: plan, attributes: [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold), .foregroundColor: color,
+            .font: NSFont.systemFont(ofSize: 11, weight: .semibold), .foregroundColor: NSColor.secondaryLabelColor,
         ])
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let extra: CGFloat = status == nil ? 0 : 16
-        avatar.draw(in: NSRect(x: 14, y: 10 + extra, width: 32, height: 32))
+        let extra: CGFloat = status == nil ? 0 : 25
+        avatar.draw(in: NSRect(x: 14, y: 2 + extra, width: 32, height: 32))
         if let plan {
-            let text = Self.tagText(plan, color: accent)
-            let width = ceil(text.size().width) + 12
-            let rect = NSRect(x: 286 - width, y: 29 + extra, width: width, height: 16)
-            accent.withAlphaComponent(0.14).setFill()
-            NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
-            text.draw(at: NSPoint(x: rect.minX + 6, y: rect.midY - text.size().height / 2))
+            let text = Self.tagText(plan)
+            let width = ceil(text.size().width) + 14
+            let rect = NSRect(x: 286 - width, y: 19.5 + extra, width: width, height: 18)
+            NSColor.labelColor.withAlphaComponent(0.10).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 9, yRadius: 9).fill()
+            text.draw(at: NSPoint(x: rect.minX + 7, y: rect.midY - text.size().height / 2))
         }
         if status != nil, let symbol = NSImage(systemSymbolName: statusSymbol, accessibilityDescription: nil) {
             let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
                 .applying(NSImage.SymbolConfiguration(paletteColors: [statusColor]))
-            symbol.withSymbolConfiguration(config)?.draw(in: NSRect(x: 14, y: 5, width: 12, height: 12))
+            symbol.withSymbolConfiguration(config)?.draw(in: NSRect(x: 14, y: 6, width: 12, height: 12))
         }
     }
 }
@@ -130,17 +129,19 @@ final class UsageLimitRowView: NSView {
 
     init(limit: LimitInfo, now: Date, first: Bool, last: Bool) {
         self.limit = limit
-        bottomPadding = last ? 6 : 0
-        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 44 + (first ? 4 : 0) + bottomPadding))
+        bottomPadding = last ? 10 : 12
+        // Header text ends 4pt above its edge; another 4pt makes the first gap 8pt.
+        // Row content is title 16, gap 7, bar 5, gap 5, caption 15 = 48pt.
+        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 48 + (first ? 4 : 0) + bottomPadding))
         let name = MenuFormatting.limitName(limit)
         let percent = limit.value.map { String(localized: "\(Int($0.rounded()))%") } ?? String(localized: "–")
         let right = menuLabel(percent, size: 13, weight: .semibold,
                               color: (limit.value ?? 0) >= 90 ? .systemRed : .labelColor)
         right.sizeToFit()
-        right.frame = NSRect(x: 286 - right.frame.width, y: 28 + bottomPadding, width: right.frame.width, height: 16)
+        right.frame = NSRect(x: 286 - right.frame.width, y: 32 + bottomPadding, width: right.frame.width, height: 16)
         addSubview(right)
         let left = menuLabel(name, size: 13)
-        left.frame = NSRect(x: 14, y: 28 + bottomPadding, width: right.frame.minX - 22, height: 16)
+        left.frame = NSRect(x: 14, y: 32 + bottomPadding, width: right.frame.minX - 22, height: 16)
         addSubview(left)
         let caption = MenuFormatting.resetCaption(value: limit.value, reset: limit.resetsAt.flatMap(parseISO), now: now)
         let text = NSMutableAttributedString(string: caption, attributes: [
@@ -169,7 +170,7 @@ final class UsageLimitRowView: NSView {
     required init?(coder: NSCoder) { nil }
 
     override func draw(_ dirtyRect: NSRect) {
-        let track = NSRect(x: 14, y: 17 + bottomPadding, width: 272, height: 5)
+        let track = NSRect(x: 14, y: 20 + bottomPadding, width: 272, height: 5)
         NSColor.quaternaryLabelColor.setFill()
         NSBezierPath(roundedRect: track, xRadius: 2.5, yRadius: 2.5).fill()
         guard let value = limit.value, value > 0 else { return }
