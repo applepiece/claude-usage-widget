@@ -760,7 +760,7 @@ def send(value):
     print(json.dumps(value), flush=True)
 initialize = receive()
 assert initialize == {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-    "clientInfo": {"name": "claude-usage-widget", "version": "2.1"}}}
+    "clientInfo": {"name": "claude-usage-widget", "version": "3.0"}}}
 send({"method": "configWarning", "params": {}})
 send({"id": 1, "result": {}})
 assert receive() == {"jsonrpc": "2.0", "method": "initialized"}
@@ -850,7 +850,7 @@ sys.stdin.read()
         with patch.object(server, "fetch_usage", return_value=usage), patch.object(server, "fetch_account", return_value={"logged_in": False}):
             self.assertEqual(json.loads(self.request("GET", "/api/usage")[1]), usage)
             self.assertEqual(json.loads(self.request("GET", "/api/account")[1]), {"logged_in": False})
-        self.assertEqual(json.loads(self.request("GET", "/api/ping")[1]), {"ok": True})
+        self.assertEqual(self.request("GET", "/api/ping"), (200, b'{"ok":true,"version":"3.0"}'))
         for path in ("/", "/index.html"):
             code, body = self.request("GET", path)
             self.assertEqual(code, 200)
@@ -877,6 +877,36 @@ sys.stdin.read()
                 self.assertEqual(code, 200)
                 self.assertTrue(json.loads(body)["ok"])
         self.assertEqual(self.subprocess.call_count, 2)
+
+    def test_quit_rejects_missing_widget_origin_and_bad_host(self):
+        headers = (
+            {"Host": "localhost:8737"},
+            {"Host": "localhost:8737", "X-Widget": "1", "Origin": "http://localhost"},
+            {"Host": "example.com:8737", "X-Widget": "1"},
+        )
+        with patch.object(server.threading, "Thread") as thread:
+            for header in headers:
+                with self.subTest(header=header):
+                    code, body = self.request("POST", "/api/quit", header)
+                    self.assertEqual(code, 403)
+                    self.assertEqual(json.loads(body), {"ok": False, "error": "forbidden"})
+            thread.assert_not_called()
+
+    def test_quit_replies_ok_and_shuts_down_on_background_thread(self):
+        from unittest.mock import Mock
+        httpd = Mock()
+        called = threading.Event()
+        shutdown_threads = []
+        def shutdown():
+            shutdown_threads.append(threading.current_thread())
+            called.set()
+        httpd.shutdown.side_effect = shutdown
+        with patch.object(server.Handler, "server", httpd, create=True):
+            code, body = self.request("POST", "/api/quit", {"Host": "127.0.0.1:8737", "X-Widget": "1"})
+            self.assertEqual((code, body), (200, b'{"ok":true}'))
+            self.assertTrue(called.wait(timeout=2))
+        httpd.shutdown.assert_called_once_with()
+        self.assertIsNot(shutdown_threads[0], threading.current_thread())
 
 
 if __name__ == "__main__":

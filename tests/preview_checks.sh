@@ -7,9 +7,9 @@ mkdir -p .build/previews
 for tone in light dark; do
   set --
   if [ "$tone" = dark ]; then set -- --dark; fi
-  .build/ClaudeUsage --preview-menu ".build/previews/menu-$tone.png" "$@"
-  .build/ClaudeUsage --preview-menu ".build/previews/signed-out-$tone.png" "$@" --signed-out
-  .build/ClaudeUsage --preview-statusbar ".build/previews/statusbar-$tone.png" "$@"
-  .build/ClaudeUsage --preview-widget ".build/previews/widget-$tone.png" "$@"
-  .build/ClaudeUsage --preview-widget ".build/previews/widget-two-$tone.png" "$@" --two
+  "dist/Claude Usage.app/Contents/MacOS/ClaudeUsage" --preview-menu ".build/previews/menu-$tone.png" "$@"
+  "dist/Claude Usage.app/Contents/MacOS/ClaudeUsage" --preview-menu ".build/previews/signed-out-$tone.png" "$@" --signed-out
+  "dist/Claude Usage.app/Contents/MacOS/ClaudeUsage" --preview-statusbar ".build/previews/statusbar-$tone.png" "$@"
+  "dist/Claude Usage.app/Contents/MacOS/ClaudeUsage" --preview-widget ".build/previews/widget-$tone.png" "$@"
+  "dist/Claude Usage.app/Contents/MacOS/ClaudeUsage" --preview-widget ".build/previews/widget-two-$tone.png" "$@" --two
 done

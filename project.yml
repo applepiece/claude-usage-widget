@@ -1,0 +1,78 @@
+name: ClaudeUsage
+options:
+  minimumXcodeGenVersion: 2.46.0
+  deploymentTarget:
+    macOS: '14.0'
+configFiles:
+  Debug: Config/Shared.xcconfig
+  Release: Config/Shared.xcconfig
+packages:
+  UsageKit:
+    path: Packages/UsageKit
+settings:
+  base:
+    SWIFT_VERSION: '6.0'
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    GCC_TREAT_WARNINGS_AS_ERRORS: YES
+    ENABLE_HARDENED_RUNTIME: YES
+    DEVELOPMENT_TEAM: FP62793T7J
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: Apple Development
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+  configs:
+    Release:
+      CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+targets:
+  ClaudeUsage:
+    type: application
+    productName: Claude Usage
+    platform: macOS
+    deploymentTarget: '14.0'
+    sources:
+      - path: Sources/ClaudeUsage
+      - path: Resources/Assets.xcassets
+      - path: Resources/Fonts
+        type: folder
+        buildPhase: resources
+      - path: Resources/PrivacyInfo.xcprivacy
+        buildPhase: resources
+      - path: server.py
+        buildPhase: resources
+      - path: widget.html
+        buildPhase: resources
+    dependencies:
+      - package: UsageKit
+    settings:
+      base:
+        PRODUCT_NAME: Claude Usage
+        EXECUTABLE_NAME: ClaudeUsage
+        PRODUCT_BUNDLE_IDENTIFIER: com.heng.claude-usage-widget
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: Config/ClaudeUsage.entitlements
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: Config/Info.plist
+      properties:
+        CFBundleIdentifier: com.heng.claude-usage-widget
+        CFBundleName: Claude Usage
+        CFBundleDisplayName: Claude Usage
+        CFBundleExecutable: ClaudeUsage
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleIconName: AppIcon
+        LSUIElement: true
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        LSApplicationCategoryType: public.app-category.developer-tools
+        NSHumanReadableCopyright: 'Copyright © 2026 hengkp. MIT License.'
+        NSAppleEventsUsageDescription: 'Claude Usage opens Terminal to run "claude auth login" when you choose Sign In.'
+        NSHighResolutionCapable: true
+schemes:
+  ClaudeUsage:
+    build:
+      targets:
+        ClaudeUsage: all
+    test:
+      targets:
+        - package: UsageKit/UsageKitTests

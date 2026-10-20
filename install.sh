@@ -7,9 +7,8 @@ cd "$(dirname "$0")"
 echo "==> Claude Usage Widget installer"
 
 # --- requirements ---------------------------------------------------------
-if ! xcode-select -p >/dev/null 2>&1 || ! command -v swiftc >/dev/null 2>&1; then
-  echo "!! Xcode Command Line Tools are required to build."
-  echo "   Run:  xcode-select --install   then re-run this script."
+if ! xcodebuild -version >/dev/null 2>&1 || ! command -v xcodegen >/dev/null 2>&1; then
+  echo "!! Xcode and xcodegen are required to build."
   exit 1
 fi
 if ! security find-generic-password -s "Claude Code-credentials" >/dev/null 2>&1; then
@@ -20,46 +19,10 @@ if ! security find-generic-password -s "Claude Code-credentials" >/dev/null 2>&1
   echo "   The widget will show \"Not signed in\"; use its menu > Sign In to Claude."
 fi
 
-# --- server files → ~/Library/Application Support/claude-usage-widget ---------------------------------
-DEST="$HOME/Library/Application Support/claude-usage-widget"
-if [ "$(pwd -P)" != "$(cd "$DEST" 2>/dev/null && pwd -P)" ]; then
-  echo "==> Installing server to $DEST"
-  mkdir -p "$DEST/app/fonts"
-  cp server.py "$DEST/"
-  cp app/fonts/PressStart2P-Regular.ttf "$DEST/app/fonts/"
-fi
-# The server used to live in ~/claude-usage-widget (until 17 Sep 2026). Remove that
-# copy only when it is the plain install dir, never a git checkout.
-LEGACY="$HOME/claude-usage-widget"
-if [ -d "$LEGACY" ] && [ ! -e "$LEGACY/.git" ] && [ "$(cd "$LEGACY" && pwd -P)" != "$(pwd -P)" ]; then
-  rm -rf "$LEGACY"; echo "==> Removed legacy $LEGACY"
-fi
-
 # --- build the app bundle --------------------------------------------------
 APP="/Applications/Claude Usage.app"
-echo "==> Building $APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Fonts"
-cat > "$APP/Contents/Info.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleIdentifier</key><string>com.heng.claude-usage-widget</string>
-  <key>CFBundleName</key><string>Claude Usage</string>
-  <key>CFBundleExecutable</key><string>ClaudeUsage</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>2.1</string>
-  <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>LSUIElement</key><true/>
-  <key>NSHighResolutionCapable</key><true/>
-</dict>
-</plist>
-PLIST
-mkdir -p .build/module-cache
-swiftc -O -module-cache-path .build/module-cache -o "$APP/Contents/MacOS/ClaudeUsage" app/*.swift
-cp app/fonts/PressStart2P-Regular.ttf "$APP/Contents/Resources/Fonts/"
-cp assets/AppIcon.icns "$APP/Contents/Resources/"
-codesign --force -s - "$APP"
+bash scripts/build-app.sh
+echo "==> ~/Library/Application Support/claude-usage-widget is no longer used; its files are kept."
 
 # --- launch ----------------------------------------------------------------
 pkill -f "Claude Usage.app/Contents/MacOS/ClaudeUsage" 2>/dev/null || true
@@ -70,8 +33,9 @@ SRV_PID="$(lsof -nP -tiTCP:8737 -sTCP:LISTEN 2>/dev/null | head -1 || true)"
 if [ -n "${SRV_PID:-}" ] && ps -p "$SRV_PID" -o args= 2>/dev/null | grep -q "server\.py"; then
   kill "$SRV_PID" 2>/dev/null || true
 fi
-pkill -f "claude-usage-widget/server.py" 2>/dev/null || true
 sleep 1
+rm -rf "$APP"
+ditto "dist/Claude Usage.app" "$APP"
 open "$APP"
 echo "==> Done! Claw'd is floating on your screen 🦀"
 echo "    • drag to move · right-click for Refresh / Quit"

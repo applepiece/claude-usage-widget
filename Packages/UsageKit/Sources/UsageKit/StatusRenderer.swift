@@ -1,132 +1,12 @@
-import Cocoa
-
-struct AccountsResponse: Decodable {
-    let accounts: [UsageAccount]
-    let fetched_at: Double
-}
-
-struct UsageAccount: Decodable {
-    let id: String
-    let label: String
-    var email: String?
-    var plan: String?
-    var source = "token"
-    var machine_login = false
-    var five_hour: LimitInfo?
-    var seven_day: LimitInfo?
-    var limits: [LimitInfo]?
-    var state = "ok"
-    var fetched_at: Double?
-    var expires_at: String?
-    var provider: String?
-    var as_of: Double?
-    var quota_source: String?
-
-    var isCodex: Bool { provider == "codex" }
-    var providerName: String { isCodex ? "Codex" : "Claude" }
-    var failed: Bool { state == "error" || state == "token_rejected" }
-    var usage: Usage {
-        Usage(five_hour: five_hour, seven_day: seven_day, limits: limits,
-              fetched_at: as_of ?? fetched_at, logged_in: true)
-    }
-    var info: AccountInfo {
-        AccountInfo(logged_in: true, email: email, name: label, plan: plan, provider: provider)
-    }
-    var highest: Double? { [five_hour?.value, seven_day?.value].compactMap { $0 }.max() }
-}
-
-extension LimitInfo {
-    var value: Double? {
-        guard let value = utilization ?? percent, value.isFinite, (0...100).contains(value) else { return nil }
-        return value
-    }
-}
-
-enum BarAccounts: String, CaseIterable { case primary, primarySecondary, all }
-enum BarStyle: String, CaseIterable { case percent, battery, hp, dual, ring }
-enum BarMetric: String, CaseIterable { case five, seven, both, max }
-
-struct Preferences {
-    let defaults: UserDefaults
-    init(_ defaults: UserDefaults = .standard) { self.defaults = defaults }
-
-    func migrate() {
-        guard !defaults.bool(forKey: "accountsV2Migrated") else { return }
-        if let old = defaults.string(forKey: "barMode") {
-            if old == "off" {
-                defaults.set("percent", forKey: "barStyle")
-                defaults.set(false, forKey: "barNumbers")
-            } else if ["five", "seven", "both"].contains(old) {
-                defaults.set(old, forKey: "barMetric")
-            }
-        }
-        defaults.set(true, forKey: "accountsV2Migrated")
-    }
-    var primaryID: String? { defaults.string(forKey: "primaryAccount") }
-    var secondaryID: String { defaults.string(forKey: "secondaryAccount") ?? "none" }
-    var accounts: BarAccounts { BarAccounts(rawValue: defaults.string(forKey: "barAccounts") ?? "") ?? .primary }
-    var style: BarStyle { BarStyle(rawValue: defaults.string(forKey: "barStyle") ?? "") ?? .battery }
-    var metric: BarMetric { BarMetric(rawValue: defaults.string(forKey: "barMetric") ?? "") ?? .max }
-    var numbers: Bool { defaults.object(forKey: "barNumbers") as? Bool ?? true }
-    var always: Bool { defaults.object(forKey: "menuBarAlways") as? Bool ?? true }
-    var twoWidgets: Bool { defaults.string(forKey: "widgetAccounts") == "primarySecondary" }
-
-    func primary(in accounts: [UsageAccount]) -> UsageAccount? {
-        accounts.first { $0.id == primaryID } ?? accounts.first { $0.machine_login } ?? accounts.first
-    }
-    func secondary(in accounts: [UsageAccount]) -> UsageAccount? {
-        accounts.first { $0.id == secondaryID && $0.id != primary(in: accounts)?.id }
-    }
-    func shown(in accounts: [UsageAccount]) -> [UsageAccount] {
-        if self.accounts == .all { return accounts }
-        return [primary(in: accounts), self.accounts == .primarySecondary ? secondary(in: accounts) : nil].compactMap { $0 }
-    }
-}
-
-func accountTags(_ accounts: [UsageAccount]) -> [String: String] {
-    var tags: [String: String] = [:]
-    for account in accounts {
-        let first = String(account.label.prefix(1)).uppercased()
-        let collide = accounts.filter {
-            $0.isCodex == account.isCodex && String($0.label.prefix(1)).uppercased() == first
-        }.count > 1
-        tags[account.id] = (account.isCodex ? "›" : "") + String(account.label.prefix(collide ? 2 : 1)).uppercased()
-    }
-    var used = Set<String>()
-    for account in accounts {
-        let prefix = account.isCodex ? "›" : ""
-        let label = account.label.uppercased()
-        var tag = tags[account.id] ?? prefix
-        var length = tag.count - prefix.count
-        var suffix = 2
-        while used.contains(tag) {
-            if length < label.count {
-                length += 1
-                tag = prefix + String(label.prefix(length))
-            } else {
-                tag = prefix + label + String(suffix)
-                suffix += 1
-            }
-        }
-        used.insert(tag)
-        tags[account.id] = tag
-    }
-    return tags
-}
-
-let usageGreen = NSColor(red: 0.19, green: 0.66, blue: 0.36, alpha: 1)
-let usageAmber = NSColor(red: 0.87, green: 0.57, blue: 0.10, alpha: 1)
-func powerColor(_ used: Double?) -> NSColor {
-    guard let used else { return .secondaryLabelColor }
-    return used >= 90 ? usageRed : (used >= 70 ? usageAmber : usageGreen)
-}
+import AppKit
 
 // All status content is a single image. Measurements happen before drawing so
 // five accounts stay below 160pt without scaling text to an unreadable size.
-enum StatusRenderer {
-    static func image(accounts: [UsageAccount], tags: [String: String], style: BarStyle,
+@MainActor
+public enum StatusRenderer {
+    public static func image(accounts: [UsageAccount], tags: [String: String], style: BarStyle,
                       metric: BarMetric, numbers: Bool, appearance: NSAppearance) -> NSImage {
-        var result: NSImage!
+        var result = NSImage(size: .zero)
         appearance.performAsCurrentDrawingAppearance {
             let ink = NSColor.labelColor.usingColorSpace(.deviceRGB) ?? .black
             let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold)
@@ -140,11 +20,11 @@ enum StatusRenderer {
             var shownMetric = metric
             func values(_ account: UsageAccount) -> [Double?] {
                 if account.failed { return [nil] }
-                if style == .dual || style == .ring { return [account.five_hour?.value, account.seven_day?.value] }
+                if style == .dual || style == .ring { return [account.fiveHour?.value, account.sevenDay?.value] }
                 switch shownMetric {
-                case .five: return [account.five_hour?.value]
-                case .seven: return [account.seven_day?.value]
-                case .both: return [account.five_hour?.value, account.seven_day?.value]
+                case .five: return [account.fiveHour?.value]
+                case .seven: return [account.sevenDay?.value]
+                case .both: return [account.fiveHour?.value, account.sevenDay?.value]
                 case .max: return [account.highest]
                 }
             }
@@ -179,7 +59,7 @@ enum StatusRenderer {
             func marker(_ a: UsageAccount) -> String {
                 if a.failed { return "!" }
                 if style == .dual || style == .ring {
-                    return a.five_hour?.value == nil || a.seven_day?.value == nil ? "–" : ""
+                    return a.fiveHour?.value == nil || a.sevenDay?.value == nil ? "–" : ""
                 }
                 return values(a).contains(where: { $0 == nil }) ? "–" : ""
             }
@@ -241,7 +121,7 @@ enum StatusRenderer {
                             }
                         }
                     case .dual:
-                        for (index, window) in [account.five_hour, account.seven_day].enumerated() {
+                        for (index, window) in [account.fiveHour, account.sevenDay].enumerated() {
                             let y: CGFloat = index == 0 ? 13 : 6
                             outline(NSRect(x: x + 0.5, y: y + 0.5, width: 25, height: 3))
                             if !account.failed, let v = window?.value {
@@ -250,7 +130,7 @@ enum StatusRenderer {
                             }
                         }
                     case .ring:
-                        for (index, window) in [account.five_hour, account.seven_day].enumerated() {
+                        for (index, window) in [account.fiveHour, account.sevenDay].enumerated() {
                             let radius: CGFloat = index == 0 ? 6 : 3
                             let center = NSPoint(x: x + 7, y: 11)
                             ink.withAlphaComponent(0.35).setStroke()

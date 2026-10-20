@@ -1,0 +1,29 @@
+{
+  "accounts": [
+    {
+      "id": "machine", "label": "pho", "email": "pho@example.com", "plan": "max",
+      "source": "keychain", "machine_login": true, "provider": "claude",
+      "five_hour": {"utilization": 15, "resets_at": "2026-10-20T14:00:00.123456Z"},
+      "seven_day": {"utilization": 82, "resets_at": "2026-10-24T14:00:00Z"},
+      "limits": [{"percent": 15, "kind": "session", "group": "session", "status": "allowed", "scope": {"model": {"display_name": "All models"}}}],
+      "state": "ok", "fetched_at": 1792480000, "expires_at": null,
+      "as_of": 1792480000, "quota_source": "official", "future_field": {"ignored": true}
+    },
+    {
+      "id": "bridge", "label": "mahidol", "email": "bridge@example.com", "plan": "team",
+      "source": "token", "machine_login": false,
+      "five_hour": {"percent": 4}, "limits": null, "state": "future_state",
+      "fetched_at": 1792480000, "expires_at": "2027-10-20T00:00:00Z",
+      "as_of": 1792480000, "quota_source": "probe"
+    },
+    {
+      "id": "codex-pro", "label": "pro", "email": "pro@example.com", "plan": "pro lite",
+      "source": "codex", "machine_login": false, "provider": "codex",
+      "five_hour": null, "seven_day": {"utilization": 12, "resets_at": "2026-10-24T14:00:00Z"},
+      "limits": [], "state": "stale", "fetched_at": 1792480000, "expires_at": null,
+      "as_of": 1792479880, "quota_source": "live"
+    }
+  ],
+  "fetched_at": 1792480001,
+  "future_top_level": true
+}

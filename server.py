@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
+SERVER_VERSION = "3.0"
 PORT = 8737
 SERVICE = "Claude Code-credentials"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -412,7 +413,7 @@ def codex_app_server_read(home, timeout=20):
 
     try:
         send({"id": 1, "method": "initialize", "params": {
-            "clientInfo": {"name": "claude-usage-widget", "version": "2.1"}}})
+            "clientInfo": {"name": "claude-usage-widget", "version": SERVER_VERSION}}})
         while True:
             message = receive()
             if "error" in message:
@@ -896,7 +897,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         if path == "/api/ping":
-            self._send(200, b'{"ok":true}', "application/json")
+            self._json(200, {"ok": True, "version": SERVER_VERSION})
         elif path == "/api/accounts":
             try:
                 self._json(200, fetch_accounts())
@@ -938,7 +939,11 @@ class Handler(BaseHTTPRequestHandler):
         # open: `?dry=1&dry=1` and `?dry=1&x=y` both parse to something else and
         # would have run the real logout from a URL that visibly says dry=1.
         dry = "dry" in parse_qs(parsed.query, keep_blank_values=True)
-        if parsed.path == "/api/refresh":
+        if parsed.path == "/api/quit":
+            self._json(200, {"ok": True})
+            self.wfile.flush()
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+        elif parsed.path == "/api/refresh":
             account_id = parse_qs(parsed.query).get("account", [None])[0]
             account = next((a for a in account_registry() if a["id"] == account_id), None)
             if account is None:
@@ -1001,4 +1006,5 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    with ThreadingHTTPServer(("127.0.0.1", PORT), Handler) as httpd:
+        httpd.serve_forever()

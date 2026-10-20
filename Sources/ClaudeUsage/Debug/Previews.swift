@@ -1,31 +1,33 @@
 import Cocoa
+import UsageKit
 
 // Development-only offscreen rendering. No window, panel, status item, app
 // launch callback, login registration or network request is created here.
+@MainActor
 func sampleAccounts() -> [UsageAccount] {
-    let iso = ISO8601DateFormatter()
     func limit(_ value: Double, hours: Double) -> LimitInfo {
-        LimitInfo(utilization: value, resets_at: iso.string(from: Date().addingTimeInterval(hours * 3600)))
+        LimitInfo(utilization: value, resetsAt: UsageFormatting.iso.string(from: Date().addingTimeInterval(hours * 3600)))
     }
     return [
         UsageAccount(id: "pho", label: "pho", email: "kriengkrai.pho@gmail.com", plan: "max",
-                     source: "keychain", machine_login: true, five_hour: limit(15, hours: 3),
-                     seven_day: limit(82, hours: 96), fetched_at: Date().timeIntervalSince1970, provider: "claude"),
+                     source: "keychain", machineLogin: true, fiveHour: limit(15, hours: 3),
+                     sevenDay: limit(82, hours: 96), fetchedAt: Date().timeIntervalSince1970, provider: .claude),
         UsageAccount(id: "kkpk", label: "kkpk", email: "kkpk@example.com", plan: "max",
-                     five_hour: limit(0, hours: 5), seven_day: limit(37, hours: 120),
-                     fetched_at: Date().timeIntervalSince1970, provider: "claude"),
+                     fiveHour: limit(0, hours: 5), sevenDay: limit(37, hours: 120),
+                     fetchedAt: Date().timeIntervalSince1970, provider: .claude),
         UsageAccount(id: "mahidol", label: "mahidol", email: "mahidol@example.com", plan: "team",
-                     five_hour: limit(4, hours: 4), fetched_at: Date().timeIntervalSince1970, provider: "claude"),
+                     fiveHour: limit(4, hours: 4), fetchedAt: Date().timeIntervalSince1970, provider: .claude),
         UsageAccount(id: "codex-pro", label: "pro", email: "pro@example.com", plan: "pro lite",
-                     source: "codex", seven_day: limit(12, hours: 96), fetched_at: Date().timeIntervalSince1970,
-                     provider: "codex", as_of: Date().timeIntervalSince1970 - 120, quota_source: "live"),
+                     source: "codex", sevenDay: limit(12, hours: 96), fetchedAt: Date().timeIntervalSince1970,
+                     provider: .codex, asOf: Date().timeIntervalSince1970 - 120, quotaSource: "live"),
         UsageAccount(id: "codex-edu", label: "edu", email: "edu@example.com", plan: "edu",
-                     source: "codex", five_hour: limit(1, hours: 4), seven_day: limit(0, hours: 168),
-                     fetched_at: Date().timeIntervalSince1970, provider: "codex",
-                     as_of: Date().timeIntervalSince1970, quota_source: "live"),
+                     source: "codex", fiveHour: limit(1, hours: 4), sevenDay: limit(0, hours: 168),
+                     fetchedAt: Date().timeIntervalSince1970, provider: .codex,
+                     asOf: Date().timeIntervalSince1970, quotaSource: "live"),
     ]
 }
 
+@MainActor
 final class PreviewCanvas: NSView {
     var statusRows: [(String, NSImage)] = []
     var transparent = false
@@ -43,6 +45,7 @@ final class PreviewCanvas: NSView {
     }
 }
 
+@MainActor
 func writePreview(_ canvas: NSView, path: String) -> Int32 {
     canvas.layoutSubtreeIfNeeded()
     guard let bitmap = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds),
@@ -51,7 +54,7 @@ func writePreview(_ canvas: NSView, path: String) -> Int32 {
     NSGraphicsContext.current = context
     canvas.effectiveAppearance.performAsCurrentDrawingAppearance {
         canvas.displayIgnoringOpacity(canvas.bounds, in: context)
-        func children(_ parent: NSView) {
+        @MainActor func children(_ parent: NSView) {
             for view in parent.subviews where !view.isHidden {
                 NSGraphicsContext.saveGraphicsState()
                 let transform = NSAffineTransform()
@@ -69,11 +72,12 @@ func writePreview(_ canvas: NSView, path: String) -> Int32 {
     do { try data.write(to: URL(fileURLWithPath: path)); return 0 } catch { return 1 }
 }
 
+@MainActor
 func renderPreview(kind: String, path: String, dark: Bool, signedOut: Bool, two: Bool) -> Int32 {
     _ = NSApplication.shared
     NSApp.setActivationPolicy(.prohibited)
     registerPixelFont()
-    let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
+    guard let appearance = NSAppearance(named: dark ? .darkAqua : .aqua) else { return 1 }
     let samples = sampleAccounts()
     let canvas: PreviewCanvas
     switch kind {
@@ -87,11 +91,11 @@ func renderPreview(kind: String, path: String, dark: Bool, signedOut: Bool, two:
                 canvas.statusRows.append((style.rawValue + " · " + mode.rawValue, image))
             }
         }
-        var error = samples[0]; error.state = "token_rejected"
+        var error = samples[0]; error.state = .tokenRejected
         canvas.statusRows.append(("battery · token rejected", StatusRenderer.image(
             accounts: [error], tags: accountTags(samples), style: .battery, metric: .max,
             numbers: true, appearance: appearance)))
-        var rejected = samples; rejected[4].state = "token_rejected"
+        var rejected = samples; rejected[4].state = .tokenRejected
         canvas.statusRows.append(("battery · all · codex rejected", StatusRenderer.image(
             accounts: rejected, tags: accountTags(samples), style: .battery, metric: .max,
             numbers: true, appearance: appearance)))
@@ -106,17 +110,16 @@ func renderPreview(kind: String, path: String, dark: Bool, signedOut: Bool, two:
             widget.showsMascot = index == 0
             widget.nightOverride = false
             widget.offline = false
-            widget.five = account.five_hour?.value.map { ($0, "14:00") }
-            widget.seven = account.seven_day?.value.map { ($0, "FRI 14:00") }
+            widget.five = account.fiveHour?.value.map { ($0, "14:00") }
+            widget.seven = account.sevenDay?.value.map { ($0, "FRI 14:00") }
             canvas.addSubview(widget)
         }
     case "--preview-menu":
         // Registration defaults are volatile: previewing never changes the
         // user's selected accounts or their saved menu preferences.
-        let defaults = UserDefaults(suiteName: "ClaudeUsage.preview." + UUID().uuidString)!
+        guard let defaults = UserDefaults(suiteName: "ClaudeUsage.preview." + UUID().uuidString) else { return 1 }
         defaults.register(defaults: ["primaryAccount": "pho", "secondaryAccount": "codex-pro"])
-        preferences = Preferences(defaults)
-        let delegate = AppDelegate()
+        let delegate = AppDelegate(preferences: Preferences(defaults))
         delegate.accounts = signedOut ? [] : samples
         let menu = delegate.buildMenu()
         let heights = menu.items.map { $0.view?.frame.height ?? ($0.isSeparatorItem ? 10 : 24) }
