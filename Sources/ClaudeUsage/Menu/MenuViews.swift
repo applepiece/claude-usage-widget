@@ -6,6 +6,14 @@ func providerAccent(_ provider: Provider) -> NSColor {
     provider == .codex ? NSColor(red: 0.27, green: 0.31, blue: 0.38, alpha: 1) : clawdSalmon
 }
 
+// The card shares the native item grid: text starts where item titles start
+// (after the state column) and right-aligned content ends where the account
+// rows' last number column ends, measured on macOS 27 without key equivalents.
+enum MenuMetrics {
+    static let leading: CGFloat = 30
+    static let trailing: CGFloat = 24
+}
+
 @MainActor
 func accountAvatar(_ account: UsageAccount?, size: CGFloat) -> NSImage {
     let image = NSImage(size: NSSize(width: size, height: size))
@@ -48,9 +56,11 @@ final class AccountHeaderView: NSView {
     private let status: String?
     private let statusColor: NSColor
     private let statusSymbol: String
+    private let signedOut: Bool
 
     init(account: UsageAccount?, now: Date = Date()) {
-        avatar = accountAvatar(account, size: 32)
+        signedOut = account == nil
+        avatar = accountAvatar(account, size: account == nil ? 32 : 28)
         plan = MenuFormatting.planTitle(account?.plan)
         switch account?.state {
         case .stale:
@@ -70,22 +80,30 @@ final class AccountHeaderView: NSView {
             statusColor = .secondaryLabelColor
             statusSymbol = ""
         }
-        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: status == nil ? 44 : 69))
+        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: signedOut ? 44 : (status == nil ? 46 : 71)))
+        autoresizingMask = [.width]
         // Preserve the existing 10pt gap above a 15pt status line.
         let extra: CGFloat = status == nil ? 0 : 25
         let name = account?.label ?? String(localized: "No accounts")
         let detail = account == nil ? String(localized: "Sign in to Claude Code to see your usage") : account?.email ?? ""
         let nameLabel = menuLabel(name, size: 13, weight: .semibold)
         let tagWidth = plan.map { ceil(Self.tagText($0).size().width) + 14 } ?? 0
-        nameLabel.frame = NSRect(x: 56, y: 20 + extra, width: 230 - (plan == nil ? 0 : tagWidth + 8), height: 17)
+        let textX: CGFloat = MenuMetrics.leading + (signedOut ? 42 : 38)
+        let textY: CGFloat = signedOut || status != nil ? 4 : 8
+        nameLabel.frame = NSRect(x: textX, y: textY + 16 + extra,
+                                width: 300 - MenuMetrics.trailing - textX - (plan == nil ? 0 : tagWidth + 8), height: 17)
+        nameLabel.autoresizingMask = [.width]
         addSubview(nameLabel)
         let email = menuLabel(detail, size: 11, color: .secondaryLabelColor)
         email.lineBreakMode = .byTruncatingMiddle
-        email.frame = NSRect(x: 56, y: 4 + extra, width: 230, height: 15)
+        email.frame = NSRect(x: textX, y: textY + extra, width: 300 - MenuMetrics.trailing - textX, height: 15)
+        email.autoresizingMask = [.width]
         addSubview(email)
         if let status {
             let label = menuLabel(status, size: 11, color: statusColor)
-            label.frame = NSRect(x: 30, y: 4, width: 256, height: 15)
+            label.frame = NSRect(x: MenuMetrics.leading + 16, y: 4,
+                                 width: 300 - MenuMetrics.trailing - MenuMetrics.leading - 16, height: 15)
+            label.autoresizingMask = [.width]
             addSubview(label)
         }
         setAccessibilityElement(true)
@@ -105,11 +123,13 @@ final class AccountHeaderView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let extra: CGFloat = status == nil ? 0 : 25
-        avatar.draw(in: NSRect(x: 14, y: 2 + extra, width: 32, height: 32))
+        avatar.draw(in: NSRect(x: MenuMetrics.leading, y: (signedOut ? 2 : (status == nil ? 9 : 5)) + extra,
+                              width: signedOut ? 32 : 28, height: signedOut ? 32 : 28))
         if let plan {
             let text = Self.tagText(plan)
             let width = ceil(text.size().width) + 14
-            let rect = NSRect(x: 286 - width, y: 19.5 + extra, width: width, height: 18)
+            let rect = NSRect(x: bounds.width - MenuMetrics.trailing - width, y: (status == nil ? 23.5 : 19.5) + extra,
+                              width: width, height: 18)
             NSColor.labelColor.withAlphaComponent(0.10).setFill()
             NSBezierPath(roundedRect: rect, xRadius: 9, yRadius: 9).fill()
             text.draw(at: NSPoint(x: rect.minX + 7, y: rect.midY - text.size().height / 2))
@@ -117,7 +137,7 @@ final class AccountHeaderView: NSView {
         if status != nil, let symbol = NSImage(systemSymbolName: statusSymbol, accessibilityDescription: nil) {
             let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
                 .applying(NSImage.SymbolConfiguration(paletteColors: [statusColor]))
-            symbol.withSymbolConfiguration(config)?.draw(in: NSRect(x: 14, y: 6, width: 12, height: 12))
+            symbol.withSymbolConfiguration(config)?.draw(in: NSRect(x: MenuMetrics.leading, y: 6, width: 12, height: 12))
         }
     }
 }
@@ -126,58 +146,186 @@ final class AccountHeaderView: NSView {
 final class UsageLimitRowView: NSView {
     private let limit: LimitInfo
     private let bottomPadding: CGFloat
+    private let nameText: NSAttributedString
+    private let valueText: NSAttributedString
 
     init(limit: LimitInfo, now: Date, first: Bool, last: Bool) {
         self.limit = limit
-        bottomPadding = last ? 10 : 12
-        // Header text ends 4pt above its edge; another 4pt makes the first gap 8pt.
-        // Row content is title 16, gap 7, bar 5, gap 5, caption 15 = 48pt.
-        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 48 + (first ? 4 : 0) + bottomPadding))
+        bottomPadding = last ? 8 : 10
         let name = MenuFormatting.limitName(limit)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        nameText = NSAttributedString(string: name, attributes: [
+            .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph,
+        ])
         let percent = limit.value.map { String(localized: "\(Int($0.rounded()))%") } ?? String(localized: "–")
-        let right = menuLabel(percent, size: 13, weight: .semibold,
-                              color: (limit.value ?? 0) >= 90 ? .systemRed : .labelColor)
-        right.sizeToFit()
-        right.frame = NSRect(x: 286 - right.frame.width, y: 32 + bottomPadding, width: right.frame.width, height: 16)
-        addSubview(right)
-        let left = menuLabel(name, size: 13)
-        left.frame = NSRect(x: 14, y: 32 + bottomPadding, width: right.frame.minX - 22, height: 16)
-        addSubview(left)
-        let caption = MenuFormatting.resetCaption(value: limit.value, reset: limit.resetsAt.flatMap(parseISO), now: now)
-        let text = NSMutableAttributedString(string: caption, attributes: [
+        let reset = limit.resetsAt.flatMap(parseISO)
+        let shortReset = MenuFormatting.shortResetText(value: limit.value, reset: reset, now: now)
+        let text = NSMutableAttributedString(string: shortReset, attributes: [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
             .foregroundColor: NSColor.secondaryLabelColor,
         ])
-        let suffix = limit.status == "rejected" ? String(localized: " · Limit reached") : ""
+        let suffix = limit.value != nil && limit.status == "rejected" ? String(localized: " · limit") : ""
         if !suffix.isEmpty {
             text.append(NSAttributedString(string: suffix, attributes: [
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: NSColor.systemRed,
+                .foregroundColor: usageRed,
             ]))
         }
-        let label = menuLabel("", size: 11)
-        label.attributedStringValue = text
-        label.frame = NSRect(x: 14, y: bottomPadding, width: 272, height: 15)
-        addSubview(label)
+        if text.length > 0 {
+            if !shortReset.isEmpty,
+               let symbol = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)?
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 9, weight: .regular)
+                    .applying(NSImage.SymbolConfiguration(paletteColors: [.secondaryLabelColor]))) {
+                let attachment = NSTextAttachment()
+                attachment.image = symbol
+                attachment.bounds = NSRect(x: 0, y: 0, width: 9, height: 9)
+                let prefix = NSMutableAttributedString(attachment: attachment)
+                prefix.append(NSAttributedString(string: " ", attributes: [.font: NSFont.systemFont(ofSize: 11)]))
+                text.insert(prefix, at: 0)
+            }
+            let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            let spaceWidth = (" " as NSString).size(withAttributes: [.font: font]).width
+            text.append(NSAttributedString(string: " ", attributes: [.font: font, .kern: 6 - spaceWidth]))
+        }
+        text.append(NSAttributedString(string: percent, attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold),
+            .foregroundColor: (limit.value ?? 0) >= 90 || limit.status == "rejected" ? usageRed : NSColor.labelColor,
+        ]))
+        valueText = text
+        // Text 16, gap 6, bar 4; 6 after the header, 10 between rows, 8 at the end.
+        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 26 + (first ? 6 : 0) + bottomPadding))
+        autoresizingMask = [.width]
         setAccessibilityElement(true)
         setAccessibilityRole(.levelIndicator)
         setAccessibilityLabel(name)
-        setAccessibilityValue(percent)
-        setAccessibilityHelp(caption + suffix)
+        setAccessibilityValue(limit.value.map { String(localized: "\(Int($0.rounded())) percent") }
+                              ?? String(localized: "Not reported for this plan"))
+        let help = MenuFormatting.resetHelp(value: limit.value, reset: reset, now: now)
+        setAccessibilityHelp(help + (limit.status == "rejected" ? String(localized: " · Limit reached") : ""))
         setAccessibilityChildren([])
     }
 
     required init?(coder: NSCoder) { nil }
 
     override func draw(_ dirtyRect: NSRect) {
-        let track = NSRect(x: 14, y: 20 + bottomPadding, width: 272, height: 5)
+        let rightX = bounds.width - MenuMetrics.trailing - valueText.size().width
+        valueText.draw(at: NSPoint(x: rightX, y: bottomPadding + 10))
+        nameText.draw(in: NSRect(x: MenuMetrics.leading, y: bottomPadding + 10,
+                                 width: max(0, rightX - MenuMetrics.leading - 8), height: 16))
+        let track = NSRect(x: MenuMetrics.leading, y: bottomPadding,
+                           width: bounds.width - MenuMetrics.leading - MenuMetrics.trailing, height: 4)
         NSColor.quaternaryLabelColor.setFill()
-        NSBezierPath(roundedRect: track, xRadius: 2.5, yRadius: 2.5).fill()
+        NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
         guard let value = limit.value, value > 0 else { return }
         let color = value >= 90 ? usageRed : (limit.kind == "session" ? usageOrange : usagePurple)
         color.setFill()
-        let fill = NSRect(x: track.minX, y: track.minY, width: max(5, track.width * value / 100), height: 5)
-        NSBezierPath(roundedRect: fill, xRadius: 2.5, yRadius: 2.5).fill()
+        let fill = NSRect(x: track.minX, y: track.minY, width: max(5, track.width * value / 100), height: 4)
+        NSBezierPath(roundedRect: fill, xRadius: 2, yRadius: 2).fill()
+    }
+}
+
+/// Attributed titles keep the account list in AppKit's native menu tracking.
+@MainActor
+enum AccountMenuTitle {
+    static let titleInset: CGFloat = 22
+    // Allow a 22pt native state/title gutter so the last column ends at x=286.
+    // These are title-relative stops; verify the system gutter in native QA.
+    static let sessionTab: CGFloat = 210
+    static let weeklyTab: CGFloat = 264
+    private static let font = NSFont.systemFont(ofSize: 13)
+    private static let numberFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+
+    static func make(_ account: UsageAccount) -> NSAttributedString {
+        let failed = MenuFormatting.failedRowText(account.state)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.tabStops = (failed == nil ? [sessionTab, weeklyTab] : [weeklyTab]).map {
+            NSTextTab(textAlignment: .right, location: $0)
+        }
+        paragraph.defaultTabInterval = 0
+        paragraph.lineBreakMode = .byClipping
+        paragraph.baseWritingDirection = .leftToRight
+        let text = NSMutableAttributedString(attributedString: attachment(providerGlyph(account.provider), y: -2))
+        // Reserve room for a three-digit meter plus separation before the first tab.
+        let labelWidth = sessionTab - 48 - 16 - 8
+        text.append(NSAttributedString(string: " " + fittedLabel(account.label, width: labelWidth), attributes: [
+            .font: font, .foregroundColor: account.state == .stale ? NSColor.secondaryLabelColor : NSColor.labelColor,
+        ]))
+        text.append(NSAttributedString(string: "\t"))
+        if let failed {
+            text.append(NSAttributedString(string: failed, attributes: [
+                .font: numberFont, .foregroundColor: NSColor.systemOrange,
+            ]))
+        } else {
+            text.append(column(account.fiveHour?.value, color: usageOrange))
+            text.append(NSAttributedString(string: "\t"))
+            text.append(column(account.sevenDay?.value, color: usagePurple))
+        }
+        let range = NSRange(location: 0, length: text.length)
+        text.addAttribute(.paragraphStyle, value: paragraph, range: range)
+        return text
+    }
+
+    static func alternate(_ title: String) -> NSAttributedString {
+        NSAttributedString(string: fittedLabel(title, width: weeklyTab), attributes: [
+            .font: font, .foregroundColor: NSColor.labelColor,
+        ])
+    }
+
+    private static func fittedLabel(_ label: String, width: CGFloat) -> String {
+        // Embedded newlines/tabs must not create a second line or a third column.
+        let singleLine = label.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+        func measured(_ value: String) -> CGFloat {
+            (value as NSString).size(withAttributes: [.font: font]).width
+        }
+        guard measured(singleLine) > width else { return singleLine }
+        var prefix = singleLine
+        while !prefix.isEmpty, measured(prefix + "…") > width { prefix.removeLast() }
+        return prefix + "…"
+    }
+
+    private static func attachment(_ image: NSImage, y: CGFloat) -> NSAttributedString {
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        attachment.bounds = NSRect(origin: NSPoint(x: 0, y: y), size: image.size)
+        return NSAttributedString(attachment: attachment)
+    }
+
+    private static func providerGlyph(_ provider: Provider) -> NSImage {
+        let image = NSImage(size: NSSize(width: 12, height: 12))
+        image.lockFocus()
+        if provider == .claude {
+            drawClawdGlyph(in: NSRect(x: 0, y: 0, width: 12, height: 12), color: .labelColor)
+        } else {
+            let text = NSAttributedString(string: "›_", attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .bold),
+                .foregroundColor: NSColor.labelColor,
+            ])
+            text.draw(at: NSPoint(x: (12 - text.size().width) / 2, y: (12 - text.size().height) / 2))
+        }
+        image.unlockFocus()
+        return image
+    }
+
+    private static func column(_ value: Double?, color: NSColor) -> NSAttributedString {
+        let meter = NSImage(size: NSSize(width: 14, height: 4))
+        meter.lockFocus()
+        let track = NSRect(x: 0, y: 0, width: 14, height: 4)
+        NSColor.quaternaryLabelColor.setFill()
+        NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
+        if let value, value > 0 {
+            (value >= 90 ? usageRed : color).setFill()
+            NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: max(1, 14 * value / 100), height: 4),
+                         xRadius: 2, yRadius: 2).fill()
+        }
+        meter.unlockFocus()
+        let text = NSMutableAttributedString(attributedString: attachment(meter, y: 3))
+        let spaceWidth = (" " as NSString).size(withAttributes: [.font: numberFont]).width
+        text.append(NSAttributedString(string: " ", attributes: [.font: numberFont, .kern: 4 - spaceWidth]))
+        text.append(NSAttributedString(string: value.map { String(Int($0.rounded())) } ?? "–", attributes: [
+            .font: numberFont, .foregroundColor: (value ?? 0) >= 90 ? NSColor.labelColor : NSColor.secondaryLabelColor,
+        ]))
+        return text
     }
 }
 

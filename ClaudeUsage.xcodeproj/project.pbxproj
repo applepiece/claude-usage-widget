@@ -28,6 +28,7 @@
 		CDE2DFC0FE965F66FC311D22 /* ServerProcess.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB58183BCB7DD2BEBC1026D1 /* ServerProcess.swift */; };
 		DEAFEE097396EB1A3B3270CD /* PixelFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = 974F60BFEACD20F43A663B08 /* PixelFont.swift */; };
 		E4F9D203D90834B062426536 /* QAOptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0807688D9DA70E273C5A7D /* QAOptions.swift */; };
+		FEE7BD212B731DE261E837FE /* qa-menu.sh in Resources */ = {isa = PBXBuildFile; fileRef = E04273224BA3FEE9350579C2 /* qa-menu.sh */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -53,6 +54,7 @@
 		C85A65CB464FEA7FFDE6699E /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		CAB79B95244FFB1313809788 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>"; };
 		CC9579623E51DF0CCB7BE7AA /* MenuViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuViews.swift; sourceTree = "<group>"; };
+		E04273224BA3FEE9350579C2 /* qa-menu.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "qa-menu.sh"; sourceTree = "<group>"; };
 		FB9B1D160229EEFA046481AD /* qa-review.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "qa-review.sh"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -96,6 +98,7 @@
 			isa = PBXGroup;
 			children = (
 				50CB40203B8291975879162F /* Previews.swift */,
+				E04273224BA3FEE9350579C2 /* qa-menu.sh */,
 				FB9B1D160229EEFA046481AD /* qa-review.sh */,
 				9A0807688D9DA70E273C5A7D /* QAOptions.swift */,
 			);
@@ -255,6 +258,7 @@
 				817344AE0CF85A6CFE5B659F /* Fonts in Resources */,
 				784B8672CDA0A745EAF52846 /* Localizable.xcstrings in Resources */,
 				7C4C256A64E072A243C1F898 /* PrivacyInfo.xcprivacy in Resources */,
+				FEE7BD212B731DE261E837FE /* qa-menu.sh in Resources */,
 				907BB9DE86F279B163D30847 /* qa-review.sh in Resources */,
 				737613FCC4311B4EF27D455E /* server.py in Resources */,
 				30D3681AE5D3E5A837E97836 /* widget.html in Resources */,

@@ -22,13 +22,13 @@ public enum MenuFormatting {
 
     public static func limitName(_ limit: LimitInfo) -> String {
         switch limit.kind {
-        case "session": return String(localized: "Current session")
-        case "weekly_all": return String(localized: "Weekly · All models")
+        case "session": return String(localized: "Session")
+        case "weekly_all": return String(localized: "Weekly")
         case "weekly_scoped":
             if let name = limit.scope?.model?.displayName, !name.isEmpty {
-                return String(localized: "Weekly · \(name)")
+                return String(localized: "Weekly \(name)")
             }
-            return String(localized: "Weekly · Scoped")
+            return String(localized: "Weekly scoped")
         case .some(let kind) where !kind.isEmpty:
             return kind.replacingOccurrences(of: "_", with: " ").capitalized
         default: return String(localized: "Usage limit")
@@ -44,6 +44,17 @@ public enum MenuFormatting {
         }
         let remaining = max(0, reset.timeIntervalSince(now))
         if remaining < 60 { return String(localized: "Resets in under a minute") }
+        let text = shortResetText(value: value, reset: reset, now: now,
+                                  calendar: calendar, locale: locale, timeZone: timeZone)
+        return remaining < 86400 ? String(localized: "Resets in \(text)") : String(localized: "Resets \(text)")
+    }
+
+    public static func shortResetText(value: Double?, reset: Date?, now: Date,
+                                      calendar: Calendar = .current, locale: Locale = .current,
+                                      timeZone: TimeZone = .current) -> String {
+        guard value != nil, let reset else { return "" }
+        let remaining = max(0, reset.timeIntervalSince(now))
+        if remaining < 60 { return "<1m" }
         var calendar = calendar
         calendar.timeZone = timeZone
         let english = Locale(identifier: "en_" + (locale.region?.identifier ?? "US"))
@@ -55,8 +66,7 @@ public enum MenuFormatting {
             formatter.allowedUnits = [.hour, .minute]
             formatter.maximumUnitCount = 2
             formatter.zeroFormattingBehavior = .dropAll
-            let duration = formatter.string(from: floor(remaining / 60) * 60) ?? ""
-            return String(localized: "Resets in \(duration)")
+            return formatter.string(from: floor(remaining / 60) * 60) ?? ""
         }
         let formatter = DateFormatter()
         formatter.locale = english
@@ -72,7 +82,76 @@ public enum MenuFormatting {
         } else if preferred.contains("h") && generated.contains("H") {
             formatter.setLocalizedDateFormatFromTemplate("EEEhmm")
         }
-        return String(localized: "Resets \(formatter.string(from: reset))")
+        return formatter.string(from: reset)
+    }
+
+    /// Spoken help keeps the meaning that is omitted from the compact visual row.
+    public static func resetHelp(value: Double?, reset: Date?, now: Date,
+                                 calendar: Calendar = .current, locale: Locale = .current,
+                                 timeZone: TimeZone = .current) -> String {
+        guard value != nil, let reset else {
+            return resetCaption(value: value, reset: reset, now: now,
+                                calendar: calendar, locale: locale, timeZone: timeZone)
+        }
+        let minutes = Int(max(0, reset.timeIntervalSince(now)) / 60)
+        guard (1..<1440).contains(minutes) else {
+            return resetCaption(value: value, reset: reset, now: now,
+                                calendar: calendar, locale: locale, timeZone: timeZone)
+        }
+        let hours = minutes / 60
+        let remainder = minutes % 60
+        var parts: [String] = []
+        if hours == 1 { parts.append(String(localized: "1 hour")) }
+        else if hours > 1 { parts.append(String(localized: "\(hours) hours")) }
+        if remainder == 1 { parts.append(String(localized: "1 minute")) }
+        else if remainder > 1 { parts.append(String(localized: "\(remainder) minutes")) }
+        return String(localized: "Resets in \(parts.joined(separator: " "))")
+    }
+
+    public static func failedRowText(_ state: AccountState) -> String? {
+        switch state {
+        case .tokenRejected: return String(localized: "⚠︎ expired")
+        case .error: return String(localized: "⚠︎ error")
+        case .ok, .stale: return nil
+        }
+    }
+
+    @MainActor
+    public static func accountTooltip(_ account: UsageAccount, now: Date,
+                                       calendar: Calendar = .current, locale: Locale = .current,
+                                       timeZone: TimeZone = .current) -> String {
+        let identity = [account.providerName, planTitle(account.plan)].compactMap { $0 }.joined(separator: " ")
+        var parts = [account.label, identity]
+        if account.failed {
+            parts.append(account.state == .tokenRejected
+                         ? String(localized: "Sign-in expired") : String(localized: "Couldn't load usage"))
+            parts.append(String(localized: "Renew in Settings"))
+        } else {
+            for (name, limit) in [(String(localized: "Session"), account.fiveHour),
+                                   (String(localized: "Weekly"), account.sevenDay)] {
+                guard let value = limit?.value else {
+                    parts.append(String(localized: "\(name) not reported for this plan"))
+                    continue
+                }
+                let reset = limit?.resetsAt.flatMap(parseISO)
+                let text = shortResetText(value: value, reset: reset, now: now,
+                                          calendar: calendar, locale: locale, timeZone: timeZone)
+                var detail = String(localized: "\(name) \(Int(value.rounded()))%")
+                if let reset, !text.isEmpty {
+                    detail += reset.timeIntervalSince(now) < 86400
+                        ? String(localized: ", resets in \(text)") : String(localized: ", resets \(text)")
+                } else {
+                    detail += value == 0 ? String(localized: ", not started") : String(localized: ", reset time unavailable")
+                }
+                if limit?.status == "rejected" { detail += String(localized: ", limit reached") }
+                parts.append(detail)
+            }
+            if account.state == .stale {
+                parts.append(String(localized: "Stale"))
+                parts.append(updated(since: timestamp(account), now: now))
+            }
+        }
+        return parts.joined(separator: " · ")
     }
 
     public static func timestamp(_ account: UsageAccount) -> Date? {

@@ -69,13 +69,22 @@ commands in this checkout: they share the generated project and `.build/xcode`.
 ## Menu and Settings
 
 Open the menu from the menu bar status item. The top card shows the primary
-account's avatar, label, plan tag and email. Each limit gets a percent, a thin
-bar and a reset time such as **Resets in 3h 41m** or **Resets Fri 09:59**.
+account's avatar, label, plan tag and email in a compact header. Each limit has
+one line with its name, a reset symbol and short time such as **2h 59m** or
+**Sat 16:20**, and its percent, above a thin bar. Orange means Session,
+purple means Weekly, and red marks usage at 90% or higher. Stale and failed
+states still appear on the card.
 
-Below the card is a checkmarked list of all accounts, grouped by provider.
-Click an account to make it primary. Hold **Option** while clicking to make it
-secondary. The remaining actions are **Show Widget on Desktop**, **Refresh
-(⌘R)**, **Settings… (⌘,)** and **Quit**.
+With multiple accounts, each gets one native menu row: provider glyph, account
+label, and aligned Session and Weekly mini meters with numbers. Claude accounts
+come first, then Codex. Missing windows show **–**; failed accounts show
+**⚠︎ expired** or **⚠︎ error**. Hover for the full plan, usage and reset details.
+The primary has a checkmark and the secondary has a circled 2. Click to make an
+account primary; hold **Option** while clicking to set or clear the secondary.
+The list is omitted with a single account. The remaining actions are
+**Show Widget** (checked when visible), **Refresh (⌘R)**, **Settings… (⌘,)**
+and **Quit (⌘Q)**. Refresh has no subtitle and is disabled as **Refreshing…**
+while a refresh is running.
 
 Settings has four tabs:
 
@@ -392,10 +401,14 @@ usage endpoint ก่อนและ probe เมื่อจำเป็น ไ
 พร้อมคำแนะนำ `scripts/add-account.sh <label>` ใน Settings > Accounts
 
 เมนู 3.0 แสดงการ์ดบัญชีหลักพร้อม avatar ชื่อ แผน email และแต่ละ limit
-มีเปอร์เซ็นต์ แถบบาง และเวลารีเซ็ต เช่น Resets in 3h 41m หรือ Resets Fri 09:59
-รายชื่อบัญชีทั้งหมดแยกตาม provider และมีเครื่องหมายเลือก คลิกเพื่อตั้งบัญชีหลัก
-กด Option ค้างแล้วคลิกเพื่อตั้งบัญชีรอง ตามด้วย **Show Widget on Desktop**,
-**Refresh (⌘R)**, **Settings… (⌘,)** และ **Quit**
+มีชื่อ เวลารีเซ็ตแบบสั้น เช่น 2h 59m หรือ Sat 16:20 และเปอร์เซ็นต์ในบรรทัดเดียว
+พร้อมแถบบางด้านล่าง สีส้มคือ Session สีม่วงคือ Weekly และสีแดงเมื่อใช้ตั้งแต่ 90%
+รายชื่อบัญชีใช้บัญชีละหนึ่งบรรทัด มีสัญลักษณ์ provider ชื่อ และแถบเล็กพร้อมตัวเลขสองคอลัมน์
+เรียง Claude ก่อน Codex ไม่มีหัวข้อหรือบรรทัดรอง ชี้เมาส์เพื่อดูรายละเอียดและเวลารีเซ็ต
+บัญชีหลักมีเครื่องหมายเลือก บัญชีรองมีเลข 2 ในวงกลม คลิกเพื่อตั้งบัญชีหลัก
+กด Option ค้างแล้วคลิกเพื่อตั้งหรือยกเลิกบัญชีรอง หากมีบัญชีเดียวจะไม่แสดงรายชื่อ
+ตามด้วย **Show Widget**, **Refresh (⌘R)** แบบไม่มีข้อความรอง,
+**Settings… (⌘,)** และ **Quit (⌘Q)** สถานะ stale และข้อผิดพลาดยังแสดงบนการ์ด
 
 Settings แบ่งเป็น 4 แท็บ:
 

@@ -12,23 +12,10 @@ extension AppDelegate: NSMenuDelegate {
         return item
     }
 
-    func setSubtitle(_ subtitle: String, on item: NSMenuItem) {
-        if #available(macOS 14.4, *) { item.subtitle = subtitle }
-        else {
-            let title = NSMutableAttributedString(string: item.title, attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular),
-            ])
-            title.append(NSAttributedString(string: "\n" + subtitle, attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: NSColor.secondaryLabelColor,
-            ]))
-            item.attributedTitle = title
-        }
-    }
-
     func buildMenu() -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
+        menu.minimumWidth = 300
         menu.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
         menu.delegate = self
         let now = Date()
@@ -38,41 +25,50 @@ extension AppDelegate: NSMenuDelegate {
         }
         menu.addItem(.separator())
         if accounts.count >= 2 {
-            let mixed = accounts.contains { $0.isCodex } && accounts.contains { !$0.isCodex }
-            let groups = [accounts.filter { !$0.isCodex }, accounts.filter { $0.isCodex }].filter { !$0.isEmpty }
-            for group in groups {
-                let title = mixed ? (group.first?.providerName ?? "") : String(localized: "Accounts")
-                menu.addItem(.sectionHeader(title: title))
-                for account in group {
-                    let item = action(account.label, #selector(makePrimary(_:)), value: account.id,
-                                      checked: account.id == model.primary?.id)
-                    item.image = accountAvatar(account, size: 20)
-                    setSubtitle(MenuFormatting.accountSubtitle(account, now: now), on: item)
-                    let isSecondary = account.id == model.secondary?.id
-                    if isSecondary { item.badge = NSMenuItemBadge(string: String(localized: "Secondary")) }
-                    menu.addItem(item)
-                    let alternateTitle = isSecondary
-                        ? String(localized: "Stop Using \(account.label) as Secondary")
-                        : String(localized: "Use \(account.label) as Secondary")
-                    let alternate = action(alternateTitle, #selector(makeSecondary(_:)), value: isSecondary ? "none" : account.id)
-                    alternate.isAlternate = true
-                    alternate.keyEquivalentModifierMask = .option
-                    alternate.isEnabled = account.id != model.primary?.id
-                    menu.addItem(alternate)
+            let ordered = accounts.filter { !$0.isCodex } + accounts.filter { $0.isCodex }
+            for account in ordered {
+                let item = action(account.label, #selector(makePrimary(_:)), value: account.id,
+                                  checked: account.id == model.primary?.id)
+                item.attributedTitle = AccountMenuTitle.make(account)
+                let isSecondary = account.id == model.secondary?.id
+                var detail = MenuFormatting.accountTooltip(account, now: now)
+                if isSecondary {
+                    item.state = .mixed
+                    if let symbol = NSImage(systemSymbolName: "2.circle", accessibilityDescription: String(localized: "Secondary account"))?
+                        .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)) {
+                        symbol.isTemplate = true
+                        symbol.size = NSSize(width: 12, height: 12)
+                        item.mixedStateImage = symbol
+                    }
+                    detail += " · " + String(localized: "Secondary account")
                 }
+                item.toolTip = detail
+                item.setAccessibilityLabel(detail)
+                item.setAccessibilityHelp(detail)
+                menu.addItem(item)
+                let alternateTitle = isSecondary
+                    ? String(localized: "Stop Using \(account.label) as Secondary")
+                    : String(localized: "Use \(account.label) as Secondary")
+                let alternate = action(alternateTitle, #selector(makeSecondary(_:)), value: isSecondary ? "none" : account.id)
+                alternate.attributedTitle = AccountMenuTitle.alternate(alternateTitle)
+                alternate.toolTip = alternateTitle + " · " + detail
+                alternate.setAccessibilityLabel(alternateTitle + " · " + detail)
+                alternate.isAlternate = true
+                alternate.keyEquivalentModifierMask = .option
+                alternate.isEnabled = account.id != model.primary?.id
+                menu.addItem(alternate)
             }
             menu.addItem(.separator())
         }
-        menu.addItem(action(String(localized: "Show Widget on Desktop"), #selector(toggleWidget), checked: model.widgetVisible))
+        menu.addItem(action(String(localized: "Show Widget"), #selector(toggleWidget), checked: model.widgetVisible))
         let refresh = action(model.refreshing ? String(localized: "Refreshing…") : String(localized: "Refresh"),
-                             #selector(refreshNow), key: "r")
+                             #selector(refreshNow))
         refresh.identifier = NSUserInterfaceItemIdentifier("refresh")
         refresh.isEnabled = !model.refreshing
-        setSubtitle(MenuFormatting.updated(since: model.lastUpdate, now: now), on: refresh)
         menu.addItem(refresh)
-        menu.addItem(action(String(localized: "Settings…"), #selector(openSettings), key: ","))
+        menu.addItem(action(String(localized: "Settings…"), #selector(openSettings)))
         menu.addItem(.separator())
-        menu.addItem(action(String(localized: "Quit Claude Usage"), #selector(quit), key: "q"))
+        menu.addItem(action(String(localized: "Quit"), #selector(quit)))
         return menu
     }
 
@@ -94,7 +90,6 @@ extension AppDelegate: NSMenuDelegate {
         item.attributedTitle = nil
         item.title = model.refreshing ? String(localized: "Refreshing…") : String(localized: "Refresh")
         item.isEnabled = !model.refreshing
-        setSubtitle(MenuFormatting.updated(since: model.lastUpdate, now: Date()), on: item)
     }
 
     @objc func makePrimary(_ sender: NSMenuItem) {
