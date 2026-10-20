@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """Local server for the Claude usage widget.
 
-Reads the Claude Code OAuth credentials from the macOS Keychain, refreshes the
-access token when expired (persisting rotated tokens back to the Keychain, same
-as Claude Code itself does), and proxies the usage endpoint to the widget page.
+Reads the Claude Code OAuth credentials from the macOS Keychain and bridge
+account files. Refreshes the machine login, proxies its official usage endpoint,
+and caches minimal Messages probes for inference-only subscription tokens.
 Tokens never leave this process and are never logged or sent to the page.
 """
 import hashlib
 import json
+import math
+import os
 import shlex
 import subprocess
 import threading
 import time
 import urllib.request
 import urllib.error
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -289,6 +292,290 @@ def fetch_usage():
         return data
 
 
+# The multi-account API deliberately projects a fixed set of public fields. The
+# registry and caches may hold credentials; neither is ever serialized directly.
+_registry_lock = threading.Lock()
+_account_states = {}
+MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+
+
+def probe_seconds():
+    try:
+        return max(120, int(os.environ.get("CLAUDE_USAGE_PROBE_SECONDS", "600")))
+    except ValueError:
+        return 600
+
+
+def public_text(value):
+    return value if isinstance(value, str) and "sk-ant-" not in value else None
+
+
+def account_registry():
+    directory = Path(os.environ.get("CLAUDE_USAGE_ACCOUNTS_DIR",
+                                   "~/.config/claude-bridge/accounts")).expanduser()
+    env = Path(os.environ.get("CLAUDE_USAGE_BRIDGE_ENV",
+                             "~/.config/claude-bridge/env")).expanduser()
+    order = []
+    try:
+        for line in env.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[7:].lstrip()
+            if line.startswith("CLAUDE_BRIDGE_ACCOUNTS="):
+                value = line.split("=", 1)[1].strip().strip("\"'")
+                order = [entry.split(":", 1)[0] for entry in value.split(",")]
+    except (OSError, UnicodeError):
+        pass
+    accounts = []
+    for path in sorted(directory.glob("*.token")):
+        label = path.stem
+        if not public_text(label):
+            continue
+        try:
+            token = path.read_text().strip()
+            # Never send a malformed/multiline credential as an HTTP header.
+            if not token.startswith("sk-ant-oat01-") or any(c.isspace() for c in token):
+                token = ""
+        except (OSError, UnicodeError):
+            token = ""
+        try:
+            metadata = json.loads(path.with_suffix(".json").read_text())
+            if not isinstance(metadata, dict):
+                metadata = {}
+        except (OSError, ValueError, UnicodeError):
+            metadata = {}
+        accounts.append({
+            "id": label, "label": label,
+            "email": public_text(metadata.get("email")),
+            "plan": public_text(metadata.get("plan")),
+            "expires_at": public_text(metadata.get("expires_at")),
+            "org_uuid": public_text(metadata.get("org_uuid")),
+            "source": "token", "machine_login": False, "_token": token,
+        })
+    ranks = {label: index for index, label in reversed(list(enumerate(order)))}
+    accounts.sort(key=lambda a: (ranks.get(a["id"], len(order)), a["id"]))
+
+    try:
+        local = local_account()
+    except Exception:
+        local = None
+    if local is not None:
+        try:
+            profile = fetch_account()
+        except Exception:
+            profile = {"logged_in": False}
+        if profile.get("logged_in"):
+            # fetch_account has already tried the profile endpoint, and keys its
+            # cache by the live credential rather than the possibly stale file.
+            with _account_lock:
+                remote = (_profile_cache.get("data") or {})
+                org = ((remote.get("organization") or {}).get("uuid")
+                       if _profile_cache.get("key") == local.get("_fingerprint") else None)
+            org = org or local.get("org")
+            match = next((a for a in accounts
+                          if org and a["org_uuid"] == org), None)
+            machine = match if match is not None else {
+                "id": "machine", "label": "This Mac", "expires_at": None,
+            }
+            machine.update(source="keychain", machine_login=True,
+                           _credential=local.get("_fingerprint"))
+            # The sidecar is a better fallback than an unverified local email.
+            if profile.get("profile_ok") or match is None:
+                machine.update(email=public_text(profile.get("email")),
+                               plan=public_text(profile.get("plan")))
+            elif profile.get("plan"):
+                machine["plan"] = public_text(profile.get("plan"))
+            if match is None:
+                accounts.append(machine)
+    return accounts
+
+
+def valid_percent(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+        return number if math.isfinite(number) and 0 <= number <= 100 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def clean_window(raw):
+    if not isinstance(raw, dict):
+        return None
+    value = valid_percent(raw.get("utilization"))
+    if value is None:
+        return None
+    return {"utilization": value, "resets_at": public_text(raw.get("resets_at")),
+            "status": public_text(raw.get("status"))}
+
+
+def parse_probe_headers(headers, rejected=False):
+    # HTTPMessage is case insensitive; normalize plain mappings for tests too.
+    headers = {key.lower(): value for key, value in headers.items()}
+    windows = {}
+    for short, name in (("5h", "five_hour"), ("7d", "seven_day")):
+        prefix = "anthropic-ratelimit-unified-" + short + "-"
+        try:
+            fraction = float(headers.get(prefix + "utilization", ""))
+            value = valid_percent(fraction * 100)
+        except (ValueError, TypeError, OverflowError):
+            value = None
+        if value is None:
+            windows[name] = None
+            continue
+        reset = None
+        try:
+            seconds = float(headers.get(prefix + "reset", ""))
+            if math.isfinite(seconds):
+                reset = datetime.fromtimestamp(seconds, timezone.utc).isoformat().replace("+00:00", "Z")
+        except (ValueError, TypeError, OverflowError, OSError):
+            pass
+        status = headers.get(prefix + "status")
+        if status not in ("allowed", "allowed_warning", "rejected"):
+            status = None
+        windows[name] = {"utilization": value, "resets_at": reset,
+                         "status": "rejected" if rejected else status}
+    if not any(windows.values()):
+        raise ValueError("missing_usage_headers")
+    windows["limits"] = None
+    return windows
+
+
+def probe_usage(token):
+    if not token:
+        raise SignedOut()
+    body = json.dumps({
+        "model": os.environ.get("CLAUDE_USAGE_PROBE_MODEL", "claude-haiku-4-5-20251001"),
+        "max_tokens": 1,
+        "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+        "messages": [{"role": "user", "content": "."}],
+    }).encode()
+    headers = api_headers(token)
+    headers.update({"anthropic-version": "2023-06-01", "Content-Type": "application/json"})
+    request = urllib.request.Request(MESSAGES_URL, data=body, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return parse_probe_headers(response.headers)
+    except urllib.error.HTTPError as error:
+        try:
+            if error.code == 429:
+                return parse_probe_headers(error.headers, rejected=True)
+            if error.code in (401, 403):
+                raise SignedOut() from None
+            raise
+        finally:
+            error.close()
+
+
+def official_usage(credential):
+    def same_login():
+        local = local_account()
+        return local is not None and local.get("_fingerprint") == credential
+
+    # Switching the Keychain while a request is in flight must never put the
+    # new login's numbers under the previous account's label.
+    if not same_login():
+        raise ValueError("credential_changed")
+    request = urllib.request.Request(USAGE_URL, headers=api_headers(get_access_token()))
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            raw = json.load(response)
+    except urllib.error.HTTPError as error:
+        error.close()
+        if error.code != 401:
+            raise
+        with _oauth_lock:
+            token = refresh_token(keychain_read())
+        request.headers["Authorization"] = "Bearer " + token
+        with urllib.request.urlopen(request, timeout=20) as response:
+            raw = json.load(response)
+    if not same_login():
+        raise ValueError("credential_changed")
+    data = {"five_hour": clean_window(raw.get("five_hour")),
+            "seven_day": clean_window(raw.get("seven_day")), "limits": None}
+    # Scope/model labels are explicitly selected, never raw upstream dictionaries.
+    if isinstance(raw.get("limits"), list):
+        limits = []
+        for limit in raw["limits"]:
+            if not isinstance(limit, dict):
+                continue
+            percent = valid_percent(limit.get("percent", limit.get("utilization")))
+            if percent is None:
+                continue
+            item = {"percent": percent}
+            for key in ("kind", "group", "resets_at"):
+                item[key] = public_text(limit.get(key))
+            scope = limit.get("scope") or {}
+            model = (scope.get("model") or {}) if isinstance(scope, dict) else {}
+            if isinstance(model, dict):
+                name = public_text(model.get("display_name"))
+                if name:
+                    item["scope"] = {"model": {"display_name": name}}
+            limits.append(item)
+        data["limits"] = limits or None
+    if not any(data.values()):
+        raise ValueError("missing_usage")
+    return data
+
+
+def account_state(account):
+    with _registry_lock:
+        return _account_states.setdefault(account["id"], {
+            "lock": threading.Lock(), "identity": None, "snapshot": None,
+            "state": "error", "next_at": 0.0, "attempt_at": 0.0,
+        })
+
+
+def fetch_registered_account(account, force=False):
+    state = account_state(account)
+    with state["lock"]:
+        # A replacement credential must not inherit another login's snapshot.
+        identity = (account["source"], account.get("_credential"),
+                    hashlib.sha256(account.get("_token", "").encode()).digest())
+        if state["identity"] != identity:
+            state.update(identity=identity, snapshot=None, state="error", next_at=0.0, attempt_at=0.0)
+        now = time.time()
+        # Explicit refresh can bypass the normal TTL only after 60s. Failures
+        # retain their backoff, so clicking Refresh cannot hammer a rejected API.
+        if force and state["state"] == "ok" and now - state["attempt_at"] >= 60:
+            state["next_at"] = 0.0
+        if now >= state["next_at"]:
+            state["attempt_at"] = now
+            used_probe = account["source"] == "token"
+            try:
+                if used_probe:
+                    snapshot = probe_usage(account.get("_token"))
+                else:
+                    try:
+                        snapshot = official_usage(account.get("_credential"))
+                    except Exception:
+                        if not account.get("_token"):
+                            raise
+                        used_probe = True
+                        snapshot = probe_usage(account["_token"])
+                snapshot["fetched_at"] = time.time()
+                state.update(snapshot=snapshot, state="ok",
+                             next_at=time.time() + (probe_seconds() if used_probe else 60))
+            except SignedOut:
+                state.update(snapshot=None, state="token_rejected", next_at=time.time() + 300)
+            except Exception:
+                state.update(state="stale" if state["snapshot"] else "error",
+                             next_at=time.time() + 300)
+        snapshot = state["snapshot"] or {}
+        result = {key: account.get(key) for key in
+                  ("id", "label", "email", "plan", "source", "machine_login", "expires_at")}
+        result.update({key: snapshot.get(key) for key in
+                       ("five_hour", "seven_day", "limits", "fetched_at")})
+        result["state"] = state["state"]
+        return result
+
+
+def fetch_accounts():
+    return {"accounts": [fetch_registered_account(a) for a in account_registry()],
+            "fetched_at": time.time()}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -322,6 +609,11 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/ping":
             self._send(200, b'{"ok":true}', "application/json")
+        elif path == "/api/accounts":
+            try:
+                self._json(200, fetch_accounts())
+            except Exception:
+                self._json(503, {"error": "accounts_unavailable"})
         elif path == "/api/account":
             try:
                 self._json(200, fetch_account())
@@ -358,7 +650,14 @@ class Handler(BaseHTTPRequestHandler):
         # open: `?dry=1&dry=1` and `?dry=1&x=y` both parse to something else and
         # would have run the real logout from a URL that visibly says dry=1.
         dry = "dry" in parse_qs(parsed.query, keep_blank_values=True)
-        if parsed.path == "/api/logout":
+        if parsed.path == "/api/refresh":
+            account_id = parse_qs(parsed.query).get("account", [None])[0]
+            account = next((a for a in account_registry() if a["id"] == account_id), None)
+            if account is None:
+                self._json(404, {"error": "not_found"})
+            else:
+                self._json(200, fetch_registered_account(account, force=True))
+        elif parsed.path == "/api/logout":
             binary = claude_command()
             if binary:
                 command = [binary, "auth", "logout"]

@@ -23,6 +23,7 @@ struct LimitScope: Decodable {
 
 struct LimitInfo: Decodable {
     let utilization: Double?
+    let status: String?
     let resets_at: String?
     let kind: String?
     let group: String?
@@ -31,8 +32,9 @@ struct LimitInfo: Decodable {
 
     init(utilization: Double? = nil, resets_at: String? = nil,
          kind: String? = nil, group: String? = nil, percent: Double? = nil,
-         scope: LimitScope? = nil) {
+         scope: LimitScope? = nil, status: String? = nil) {
         self.utilization = utilization
+        self.status = status
         self.resets_at = resets_at
         self.kind = kind
         self.group = group
@@ -112,6 +114,7 @@ func fmtWhen(_ d: Date) -> String {
 func registerPixelFont() {
     let candidates = [
         Bundle.main.resourcePath.map { $0 + "/Fonts/PressStart2P-Regular.ttf" },
+        FileManager.default.currentDirectoryPath + "/app/fonts/PressStart2P-Regular.ttf",
         ("~/claude-usage-widget/app/fonts/PressStart2P-Regular.ttf" as NSString).expandingTildeInPath,
     ].compactMap { $0 }
     for path in candidates where FileManager.default.fileExists(atPath: path) {
@@ -209,12 +212,29 @@ private final class PlanPillView: NSView {
     }
 }
 
+private final class AccountRoleView: NSView {
+    let role: String
+    init(role: String) {
+        self.role = role
+        super.init(frame: NSRect(x: 0, y: 0, width: role == "PRIMARY" ? 53 : 68, height: 13))
+    }
+    required init?(coder: NSCoder) { nil }
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.quaternaryLabelColor.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 3, yRadius: 3).fill()
+        (role as NSString).draw(at: NSPoint(x: 5, y: 1),
+                                withAttributes: [.font: NSFont.systemFont(ofSize: 8, weight: .bold),
+                                                 .foregroundColor: NSColor.secondaryLabelColor])
+    }
+}
+
 final class AccountHeaderView: NSView {
     private let account: AccountInfo
 
-    init(account: AccountInfo) {
+    init(account: AccountInfo, role: String? = nil) {
         self.account = account
-        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 58))
+        let offset: CGFloat = role == nil ? 0 : 14
+        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 58 + offset))
 
         let email = account.email ?? ""
         let fallbackName = email.split(separator: "@", maxSplits: 1)
@@ -231,17 +251,22 @@ final class AccountHeaderView: NSView {
         addSubview(nameLabel)
         addSubview(emailLabel)
 
+        if let role {
+            let chip = AccountRoleView(role: role)
+            chip.frame.origin = NSPoint(x: 58, y: 5)
+            addSubview(chip)
+        }
         var textMaxX: CGFloat = 306
         if account.logged_in, let plan = account.plan, !plan.isEmpty {
             let pill = PlanPillView(plan: plan)
             // centre the chip on the name line rather than pinning it by its top
             pill.frame.origin = NSPoint(x: 306 - pill.frame.width,
-                                        y: 29 + (17 - pill.frame.height) / 2)
+                                        y: 29 + offset + (17 - pill.frame.height) / 2)
             addSubview(pill)
             textMaxX = pill.frame.minX - 8
         }
-        nameLabel.frame = NSRect(x: 58, y: 29, width: textMaxX - 58, height: 17)
-        emailLabel.frame = NSRect(x: 58, y: 13, width: textMaxX - 58, height: 15)
+        nameLabel.frame = NSRect(x: 58, y: 29 + offset, width: textMaxX - 58, height: 17)
+        emailLabel.frame = NSRect(x: 58, y: 13 + offset, width: textMaxX - 58, height: 15)
     }
 
     required init?(coder: NSCoder) { nil }
@@ -249,8 +274,8 @@ final class AccountHeaderView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let avatarColor = account.logged_in ? clawdSalmon : NSColor.tertiaryLabelColor
         avatarColor.setFill()
-        NSBezierPath(ovalIn: NSRect(x: 14, y: 12, width: 34, height: 34)).fill()
-        drawClawdGlyph(in: NSRect(x: 21, y: 22, width: 20, height: 14),
+        NSBezierPath(ovalIn: NSRect(x: 14, y: bounds.height - 46, width: 34, height: 34)).fill()
+        drawClawdGlyph(in: NSRect(x: 21, y: bounds.height - 36, width: 20, height: 14),
                        color: .white, eyeColor: avatarColor)
 
         // inset hairline: identity above, usage below. Drawn in the view rather
@@ -288,39 +313,30 @@ final class UsageSectionView: NSView {
 
 final class UsageLimitRowView: NSView {
     private let limit: LimitInfo
-    private let percent: Double
+    private let percent: Double?
 
     init(limit: LimitInfo, now: Date) {
         self.limit = limit
-        self.percent = limit.percent ?? limit.utilization ?? 0
-        // 44 tall so the bar hugs its own label (5pt) and the next row starts
-        // 16pt away: the pair has to read as one unit, not as evenly spaced lines
-        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 44))
+        self.percent = limit.value
+        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 58))
 
         let label = menuLabel(Self.label(for: limit), size: 12.5,
                               weight: .regular, color: .labelColor)
-        let pct = Int(percent.rounded())
-        let reset = Self.resetText(limit.resets_at, now: now)
-        let rightText = "\(pct)% · \(reset)"
-        let right = menuLabel("", size: 12, weight: .regular,
-                              color: .secondaryLabelColor)
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12),
-            .foregroundColor: NSColor.secondaryLabelColor,
-        ]
-        let status = NSMutableAttributedString(string: rightText, attributes: attributes)
-        if percent >= 90 {
-            status.addAttribute(.foregroundColor, value: usageRed,
-                                range: NSRange(location: 0, length: "\(pct)%".utf16.count))
-        }
-        right.attributedStringValue = status
+        let rightText = percent.map { "\(Int($0.rounded()))% used" } ?? "–"
+        let right = menuLabel(rightText, size: 12, weight: .semibold,
+                              color: (percent ?? 0) >= 90 ? usageRed : .labelColor)
         right.sizeToFit()
-        right.frame = NSRect(x: 306 - right.frame.width, y: 24,
+        right.frame = NSRect(x: 306 - right.frame.width, y: 36,
                              width: right.frame.width, height: 16)
-        label.frame = NSRect(x: 14, y: 24,
+        label.frame = NSRect(x: 14, y: 36,
                              width: max(0, right.frame.minX - 22), height: 17)
         addSubview(label)
         addSubview(right)
+        let resetText = percent == nil ? "Window unavailable" : Self.resetText(limit.resets_at, now: now)
+        let reset = menuLabel(resetText + (limit.status == "rejected" ? " · rejected" : ""),
+                              size: 10.5, weight: .regular, color: .secondaryLabelColor)
+        reset.frame = NSRect(x: 14, y: 4, width: 292, height: 15)
+        addSubview(reset)
     }
 
     required init?(coder: NSCoder) { nil }
@@ -344,22 +360,19 @@ final class UsageLimitRowView: NSView {
     }
 
     private static func resetText(_ value: String?, now: Date) -> String {
-        guard let value, let date = parseISO(value) else { return "ready" }
-        let remaining = max(0, date.timeIntervalSince(now))
-        if remaining < 60 * 60 {
-            return "resets \(max(1, Int(remaining / 60)))m"
-        }
-        if remaining < 24 * 60 * 60 {
-            return "resets \(max(1, Int(remaining / (60 * 60))))h"
-        }
-        return "resets \(max(1, Int(remaining / (24 * 60 * 60))))d"
+        guard let value, let date = parseISO(value) else { return "Ready · no active window" }
+        let df = DateFormatter()
+        df.dateStyle = .short
+        df.timeStyle = .short
+        return "Resets at " + df.string(from: date)
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let track = NSRect(x: 14, y: 13, width: 292, height: 6)
+        let track = NSRect(x: 14, y: 25, width: 292, height: 5)
         NSColor.quaternaryLabelColor.setFill()
         NSBezierPath(roundedRect: track, xRadius: 3, yRadius: 3).fill()
 
+        guard let percent else { return }
         let clamped = min(100, max(0, percent))
         guard clamped > 0 else { return }
         let width = min(track.width, max(6, track.width * CGFloat(clamped) / 100))
@@ -379,13 +392,14 @@ final class UsageLimitRowView: NSView {
 }
 
 enum UsageMenuViews {
-    static func items(account: AccountInfo, usage: Usage?, now: Date = Date()) -> [NSMenuItem] {
-        var items = [item(with: AccountHeaderView(account: account))]
+    static func items(account: AccountInfo, usage: Usage?, role: String? = nil,
+                      state: String = "ok", now: Date = Date()) -> [NSMenuItem] {
+        var items = [item(with: AccountHeaderView(account: account, role: role))]
         guard account.logged_in else { return items }
 
         let fetched = usage?.fetched_at.map { Date(timeIntervalSince1970: $0) } ?? now
         items.append(item(with: UsageSectionView(
-            freshness: freshnessText(since: fetched, now: now))))
+            freshness: state == "ok" ? freshnessText(since: fetched, now: now) : state.replacingOccurrences(of: "_", with: " ").uppercased())))
         for limit in limits(from: usage) {
             items.append(item(with: UsageLimitRowView(limit: limit, now: now)))
         }
@@ -410,21 +424,19 @@ enum UsageMenuViews {
     private static func limits(from usage: Usage?) -> [LimitInfo] {
         if let limits = usage?.limits, !limits.isEmpty { return limits }
         var limits: [LimitInfo] = []
-        if let five = usage?.five_hour {
-            limits.append(LimitInfo(
-                resets_at: five.resets_at, kind: "session", group: "session",
-                percent: five.percent ?? five.utilization))
-        }
-        if let seven = usage?.seven_day {
-            limits.append(LimitInfo(
-                resets_at: seven.resets_at, kind: "weekly_all", group: "weekly",
-                percent: seven.percent ?? seven.utilization))
-        }
+        limits.append(LimitInfo(resets_at: usage?.five_hour?.resets_at,
+                                kind: "session", group: "session", percent: usage?.five_hour?.value,
+                                status: usage?.five_hour?.status))
+        limits.append(LimitInfo(resets_at: usage?.seven_day?.resets_at,
+                                kind: "weekly_all", group: "weekly", percent: usage?.seven_day?.value,
+                                status: usage?.seven_day?.status))
         return limits
     }
 }
 
 final class WidgetView: NSView {
+    var accountTag = ""
+    var showsMascot = true
     var five: (pct: Double, when: String)?
     var seven: (pct: Double, when: String)?
     var offline = true
@@ -512,13 +524,13 @@ final class WidgetView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        drawBar(y: 42, data: five, fill: orangeFill)
-        drawBar(y: 10, data: seven, fill: purpleFill)
-        drawClawd()
+        drawBar(y: 42, data: five, fill: orangeFill, label: "5H")
+        drawBar(y: 10, data: seven, fill: purpleFill, label: "WK")
+        if showsMascot { drawClawd() }
     }
 
     // ============ compact flat Pokemon-style bars ============
-    private func drawBar(y: CGFloat, data: (pct: Double, when: String)?, fill: NSColor) {
+    private func drawBar(y: CGFloat, data: (pct: Double, when: String)?, fill: NSColor, label: String) {
         let border = isDark ? NSColor(red: 0.93, green: 0.90, blue: 0.84, alpha: 1)
                             : NSColor(red: 0.15, green: 0.13, blue: 0.10, alpha: 1)
         let track = isDark ? NSColor(red: 0.23, green: 0.22, blue: 0.19, alpha: 1)
@@ -539,7 +551,7 @@ final class WidgetView: NSView {
         track.setFill()
         notched(box.insetBy(dx: 2, dy: 2), 2)
 
-        if !offline, !signedOut, pct > 0 {
+        if !offline, !signedOut, data != nil, pct > 0 {
             let inner = box.insetBy(dx: 3, dy: 3)
             let w = max(4, (inner.width * CGFloat(pct) / 100).rounded())
             fill.setFill()
@@ -547,11 +559,14 @@ final class WidgetView: NSView {
         }
 
         let font = pixelFont(8)
-        let when = signedOut ? "SIGN IN" : (offline ? "OFFLINE" : (data?.when ?? "-"))
+        let status = signedOut ? "SIGN IN" : (offline ? "OFFLINE" : (data?.when ?? "-"))
+        // the account tag rides inside the bar (only set when two accounts are stacked),
+        // so the widget keeps its original size and nothing floats over the wallpaper
+        let when = accountTag.isEmpty ? status : accountTag + " " + status
         (when as NSString).draw(
             at: NSPoint(x: box.minX + 7, y: y + 7),
             withAttributes: [.font: font, .foregroundColor: ink])
-        let ps = ((offline || signedOut) ? "-%" : "\(Int(pct.rounded()))%") as NSString
+        let ps = ((offline || signedOut || data == nil) ? "–" : "\(Int(pct.rounded()))%") as NSString
         let sz = ps.size(withAttributes: [.font: font])
         ps.draw(at: NSPoint(x: box.maxX - 7 - sz.width, y: y + 7),
                 withAttributes: [.font: font, .foregroundColor: ink])

@@ -48,14 +48,15 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>Claude Usage</string>
   <key>CFBundleExecutable</key><string>ClaudeUsage</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleShortVersionString</key><string>2.0</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
 PLIST
-swiftc -O -o "$APP/Contents/MacOS/ClaudeUsage" app/WidgetView.swift app/main.swift
+mkdir -p .build/module-cache
+swiftc -O -module-cache-path .build/module-cache -o "$APP/Contents/MacOS/ClaudeUsage" app/*.swift
 cp app/fonts/PressStart2P-Regular.ttf "$APP/Contents/Resources/Fonts/"
 cp assets/AppIcon.icns "$APP/Contents/Resources/"
 codesign --force -s - "$APP"

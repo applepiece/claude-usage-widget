@@ -2,3 +2,6 @@
 nohup.out
 *.iconset/
 __pycache__/
+
+.build/
+RESULT.md

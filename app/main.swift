@@ -1,532 +1,431 @@
-// Claude Usage: tiny always-on-top floating widget (Codex-pets style)
-// Shows 5-hour + weekly limit bars with reset times, data from the local
-// server.py proxy (which owns OAuth refresh against the real account).
+// Claude Usage 2.0 — AppKit only. Credentials stay in the local Python server.
 import Cocoa
 import ServiceManagement
 
 let widgetDir = ("~/Library/Application Support/claude-usage-widget" as NSString).expandingTildeInPath
-let apiURL = URL(string: "http://127.0.0.1:8737/api/usage")!
-let pingURL = URL(string: "http://127.0.0.1:8737/api/ping")!
-let accountURL = URL(string: "http://127.0.0.1:8737/api/account")!
-let loginURL = URL(string: "http://127.0.0.1:8737/api/login")!
-let logoutURL = URL(string: "http://127.0.0.1:8737/api/logout")!
-
-// What the menu-bar status item shows next to the Claw'd glyph.
-enum BarMode: String { case off, five, seven, both }
+let baseURL = "http://127.0.0.1:8737"
+var preferences = Preferences()
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var panel: NSPanel!
+    var canvas: NSView!
     var view: WidgetView!
+    var secondaryView: WidgetView!
     var statusItem: NSStatusItem?
+    var appearanceObservation: NSKeyValueObservation?
+    var accounts: [UsageAccount] = []
     var failCount = 0
-    var lastReset5: String?
-    var lastReset7: String?
-    var account = AccountInfo(logged_in: false)
-    var latestUsage: Usage?
-
-    var barMode: BarMode {
-        get { BarMode(rawValue: UserDefaults.standard.string(forKey: "barMode") ?? "") ?? .five }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "barMode") }
-    }
+    var refreshing = false
+    var refreshPending = false
+    var switchWatch: Timer?
+    var previous: [String: UsageAccount] = [:]
+    var danceEnds: [String: Date] = [:]
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        // single instance: a second launch just exits
-        if let bid = Bundle.main.bundleIdentifier {
-            let others = NSRunningApplication.runningApplications(withBundleIdentifier: bid)
-                .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
-            if !others.isEmpty { NSApp.terminate(nil); return }
+        if let bid = Bundle.main.bundleIdentifier,
+           NSRunningApplication.runningApplications(withBundleIdentifier: bid)
+            .contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
+            NSApp.terminate(nil); return
         }
-
         NSApp.setActivationPolicy(.accessory)
         registerPixelFont()
-
-        // launch at login (idempotent; user-visible in System Settings › Login Items)
+        preferences.migrate()
         try? SMAppService.mainApp.register()
-
         let rect = NSRect(x: 0, y: 0, width: 216, height: 74)
-        panel = NSPanel(contentRect: rect,
-                        styleMask: [.borderless, .nonactivatingPanel],
+        panel = NSPanel(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
         panel.level = .floating
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.isMovableByWindowBackground = false  // WidgetView drags manually
+        panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
-
+        canvas = NSView(frame: rect)
+        panel.contentView = canvas
         view = WidgetView(frame: rect)
-        view.autoresizingMask = [.width, .height]
-        panel.contentView = view
-
+        secondaryView = WidgetView(frame: rect)
+        secondaryView.showsMascot = false
+        for widget in [view!, secondaryView!] {
+            canvas.addSubview(widget)
+            widget.menuProvider = { [weak self] in self?.buildMenu() ?? NSMenu() }
+            widget.onLegClick = { [weak self] in self?.minimizeToMenuBar() }
+        }
         if let saved = UserDefaults.standard.string(forKey: "pos") {
             panel.setFrameOrigin(NSPointFromString(saved))
-        } else if let scr = NSScreen.main {
-            panel.setFrameOrigin(NSPoint(x: scr.visibleFrame.maxX - rect.width - 16,
-                                         y: scr.visibleFrame.maxY - rect.height - 12))
+        } else if let screen = NSScreen.main {
+            panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.maxX - rect.width - 16,
+                                         y: screen.visibleFrame.maxY - rect.height - 12))
         }
-        panel.orderFrontRegardless()
-
-        // right-click menu (rebuilt each open so checkmarks reflect state);
-        // click Claw'd's legs to tuck the widget into the menu bar
-        view.menuProvider = { [weak self] in self?.buildMenu(minimized: false) ?? NSMenu() }
-        view.onLegClick = { [weak self] in self?.minimizeToMenuBar() }
-
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.didMoveNotification, object: panel, queue: .main) { _ in
+        NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification,
+                                               object: panel, queue: .main) { [weak self] _ in
+            guard let self else { return }
             UserDefaults.standard.set(NSStringFromPoint(self.panel.frame.origin), forKey: "pos")
         }
-
-        // restore the tucked-away state from last session
-        if UserDefaults.standard.bool(forKey: "minimized") { minimizeToMenuBar() }
-
+        if !UserDefaults.standard.bool(forKey: "minimized") { panel.orderFrontRegardless() }
+        updateUI()
         ensureServer()
         refresh()
-        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in self.refresh() }
-        // Claw'd animation clock (~20fps)
-        Timer.scheduledTimer(withTimeInterval: 1.0 / 20.0, repeats: true) { _ in
-            self.view.t += 1.0 / 20.0
-            self.view.needsDisplay = true
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.refresh() }
+        Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            for widget in [self.view!, self.secondaryView!] {
+                widget.t += 0.05
+                widget.needsDisplay = true
+            }
         }
     }
 
-    // ================= menu-bar (collapsed) mode =================
-
     @objc func minimizeToMenuBar() {
+        panel.orderOut(nil)
+        UserDefaults.standard.set(true, forKey: "minimized")
+        updateStatusItem()
+    }
+    @objc func restoreFromMenuBar() {
+        panel.orderFrontRegardless()
+        UserDefaults.standard.set(false, forKey: "minimized")
+        updateStatusItem()
+    }
+    @objc func statusClicked() {
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+            statusItem?.menu = buildMenu()
+            statusItem?.button?.performClick(nil)
+            statusItem?.menu = nil
+        } else { restoreFromMenuBar() }
+    }
+
+    func updateStatusItem() {
+        guard panel != nil else { return }
+        let needed = preferences.always || !panel.isVisible
+        if !needed {
+            appearanceObservation = nil
+            if let item = statusItem { NSStatusBar.system.removeStatusItem(item) }
+            statusItem = nil
+            return
+        }
         if statusItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-            item.button?.image = WidgetView.menuBarIcon()
-            item.button?.imagePosition = .imageLeading
             item.button?.target = self
             item.button?.action = #selector(statusClicked)
             item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
             statusItem = item
+            appearanceObservation = item.button?.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+                DispatchQueue.main.async { self?.updateStatusItem() }
+            }
         }
-        updateStatusItem()
-        panel.orderOut(nil)
-        UserDefaults.standard.set(true, forKey: "minimized")
+        guard let button = statusItem?.button else { return }
+        button.title = ""
+        button.image = StatusRenderer.image(accounts: preferences.shown(in: accounts), tags: accountTags(accounts),
+                                             style: preferences.style, metric: preferences.metric,
+                                             numbers: preferences.numbers, appearance: button.effectiveAppearance)
+        button.toolTip = accounts.isEmpty ? "Claude Usage · No accounts" : preferences.shown(in: accounts).map {
+            "\($0.label): 5H \(percentage($0.five_hour)), WK \(percentage($0.seven_day)) · \($0.state)"
+        }.joined(separator: "\n")
+        button.setAccessibilityLabel(button.toolTip)
     }
 
-    @objc func restoreFromMenuBar() {
-        panel.orderFrontRegardless()
-        if let item = statusItem { NSStatusBar.system.removeStatusItem(item); statusItem = nil }
-        UserDefaults.standard.set(false, forKey: "minimized")
-    }
-
-    // left-click the glyph → reopen the widget; right/ctrl-click → options menu
-    @objc func statusClicked() {
-        let e = NSApp.currentEvent
-        if e?.type == .rightMouseUp || e?.modifierFlags.contains(.control) == true {
-            let menu = buildMenu(minimized: true)
-            statusItem?.menu = menu
-            statusItem?.button?.performClick(nil)
-            statusItem?.menu = nil
-        } else {
-            restoreFromMenuBar()
+    func updateUI() {
+        guard panel != nil else { return }
+        let primary = preferences.primary(in: accounts)
+        let secondary = preferences.twoWidgets ? preferences.secondary(in: accounts) : nil
+        let height: CGFloat = secondary == nil ? 74 : 148
+        if panel.frame.height != height {
+            var frame = panel.frame
+            frame.origin.y += frame.height - height
+            frame.size.height = height
+            panel.setFrame(frame, display: false)
         }
-    }
-
-    private func pctText(_ v: (pct: Double, when: String)?) -> String {
-        guard !view.offline, !view.signedOut, let v else { return "–" }
-        return "\(Int(v.pct.rounded()))%"
-    }
-
-    // percentage string shown next to the glyph, per the chosen BarMode
-    private func statusText() -> String {
-        switch barMode {
-        case .off:   return ""
-        case .five:  return pctText(view.five)
-        case .seven: return pctText(view.seven)
-        case .both:  return pctText(view.five) + " · " + pctText(view.seven)
+        canvas.frame.size = NSSize(width: 216, height: height)
+        view.frame = NSRect(x: 0, y: height - 74, width: 216, height: 74)
+        secondaryView.frame = NSRect(x: 0, y: 0, width: 216, height: 74)
+        secondaryView.isHidden = secondary == nil
+        let tags = accountTags(accounts)
+        func apply(_ account: UsageAccount?, to widget: WidgetView) {
+            widget.accountTag = secondary == nil ? "" : (account.flatMap { tags[$0.id] } ?? "")
+            widget.signedOut = account == nil
+            // a stale snapshot is still the last known truth; only a dead account reads OFFLINE
+            widget.offline = account.map { $0.state != "ok" && $0.state != "stale" } ?? false
+            func convert(_ limit: LimitInfo?) -> (Double, String)? {
+                guard let limit, let value = limit.value else { return nil }
+                return (value, limit.resets_at.flatMap(parseISO).map(fmtWhen) ?? "READY")
+            }
+            widget.five = convert(account?.five_hour)
+            widget.seven = convert(account?.seven_day)
+            if let id = account?.id, let end = danceEnds[id] {
+                widget.danceUntil = widget.t + CGFloat(max(0, end.timeIntervalSinceNow))
+            } else { widget.danceUntil = -1 }
+            widget.needsDisplay = true
         }
-    }
-
-    func updateStatusItem() {
-        guard let btn = statusItem?.button else { return }
-        let txt = statusText()
-        if txt.isEmpty {
-            btn.attributedTitle = NSAttributedString(string: "")
-        } else {
-            let font = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
-            btn.attributedTitle = NSAttributedString(
-                string: " " + txt,
-                attributes: [.font: font, .foregroundColor: NSColor.labelColor])
-        }
-    }
-
-    @objc func setBarMode(_ sender: NSMenuItem) {
-        if let raw = sender.representedObject as? String, let m = BarMode(rawValue: raw) {
-            barMode = m
-        }
+        apply(primary, to: view)
+        apply(secondary, to: secondaryView)
         updateStatusItem()
     }
 
-    func buildMenu(minimized: Bool) -> NSMenu {
-        let menu = NSMenu()
-        for item in UsageMenuViews.items(account: account, usage: latestUsage) {
+    func percentage(_ limit: LimitInfo?) -> String {
+        limit?.value.map { "\(Int($0.rounded()))%" } ?? "–"
+    }
+    func action(_ title: String, _ selector: Selector, value: Any? = nil, checked: Bool = false) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+        item.target = self
+        item.representedObject = value
+        item.state = checked ? .on : .off
+        return item
+    }
+    func submenu(_ title: String, in menu: NSMenu) -> NSMenu {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let sub = NSMenu(); item.submenu = sub; menu.addItem(item)
+        return sub
+    }
+    func section(_ account: UsageAccount, role: String? = nil, in menu: NSMenu) {
+        let usage = account.failed ? nil : account.usage
+        for item in UsageMenuViews.items(account: account.info, usage: usage, role: role, state: account.state) {
             menu.addItem(item)
         }
-
-        if !account.logged_in {
-            let signIn = NSMenuItem(title: "Sign In to Claude…",
-                                    action: #selector(startLogin), keyEquivalent: "")
-            signIn.target = self
-            menu.addItem(signIn)
-            menu.addItem(.separator())
-        } else {
-            menu.addItem(.separator())
+        if account.state == "token_rejected" {
+            let hint = NSMenuItem(title: "Renew: scripts/add-account.sh \(account.id)", action: nil, keyEquivalent: "")
+            hint.isEnabled = false; menu.addItem(hint)
         }
-
-        if minimized {
-            let s = NSMenuItem(title: "Show Widget", action: #selector(restoreFromMenuBar), keyEquivalent: "")
-            s.target = self
-            menu.addItem(s)
-        } else {
-            let m = NSMenuItem(title: "Minimize to Menu Bar", action: #selector(minimizeToMenuBar), keyEquivalent: "m")
-            m.target = self
-            menu.addItem(m)
+    }
+    func buildMenu() -> NSMenu {
+        let menu = NSMenu()
+        let primary = preferences.primary(in: accounts)
+        let secondary = preferences.secondary(in: accounts)
+        if let primary { section(primary, role: "PRIMARY", in: menu) }
+        else {
+            for item in UsageMenuViews.items(account: AccountInfo(logged_in: false), usage: nil) { menu.addItem(item) }
         }
-
-        let disp = NSMenuItem(title: "Menu Bar %", action: nil, keyEquivalent: "")
-        let sub = NSMenu()
-        let options: [(String, BarMode)] = [
-            ("Off", .off), ("5-Hour only", .five), ("Weekly only", .seven), ("Both", .both),
-        ]
-        for (title, mode) in options {
-            let it = NSMenuItem(title: title, action: #selector(setBarMode(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = mode.rawValue
-            it.state = (barMode == mode) ? .on : .off
-            sub.addItem(it)
-        }
-        disp.submenu = sub
-        menu.addItem(disp)
-
-        let r = NSMenuItem(title: "Refresh Now", action: #selector(refresh), keyEquivalent: "r")
-        r.target = self
-        menu.addItem(r)
-        menu.addItem(.separator())
-
-        let settings = NSMenuItem(title: "Usage Settings…",
-                                  action: #selector(openUsageSettings), keyEquivalent: "")
-        settings.target = self
-        menu.addItem(settings)
-        if account.logged_in {
-            let switchAccount = NSMenuItem(title: "Switch Account…",
-                                           action: #selector(startLogin), keyEquivalent: "")
-            switchAccount.target = self
-            menu.addItem(switchAccount)
-            let signOut = NSMenuItem(title: "Sign Out", action: #selector(confirmSignOut),
-                                     keyEquivalent: "")
-            signOut.target = self
-            menu.addItem(signOut)
+        if let secondary { menu.addItem(.separator()); section(secondary, role: "SECONDARY", in: menu) }
+        let others = accounts.filter { $0.id != primary?.id && $0.id != secondary?.id }
+        if !others.isEmpty { menu.addItem(.separator()) }
+        for account in others {
+            let summary = account.failed ? account.state.replacingOccurrences(of: "_", with: " ")
+                : "5H \(percentage(account.five_hour)) · WK \(percentage(account.seven_day))" + (account.state == "stale" ? " · stale" : "")
+            let sub = submenu("\(account.label) · \(summary)", in: menu)
+            section(account, in: sub)
+            sub.addItem(.separator())
+            sub.addItem(action("Make Primary", #selector(makePrimary(_:)), value: account.id))
+            sub.addItem(action("Make Secondary", #selector(makeSecondary(_:)), value: account.id))
         }
         menu.addItem(.separator())
-
-        let q = NSMenuItem(title: "Quit Claude Usage", action: #selector(quit), keyEquivalent: "q")
-        q.target = self
-        menu.addItem(q)
+        let primaryMenu = submenu("Primary Account", in: menu)
+        let secondaryMenu = submenu("Secondary Account", in: menu)
+        secondaryMenu.addItem(action("None", #selector(makeSecondary(_:)), value: "none", checked: secondary == nil))
+        for account in accounts {
+            let title = account.label + (account.email.map { " — " + $0 } ?? "")
+            primaryMenu.addItem(action(title, #selector(makePrimary(_:)), value: account.id, checked: account.id == primary?.id))
+            if account.id != primary?.id {
+                secondaryMenu.addItem(action(title, #selector(makeSecondary(_:)), value: account.id, checked: account.id == secondary?.id))
+            }
+        }
+        let bar = submenu("Menu Bar", in: menu)
+        func group(_ title: String, key: String, selected: String, options: [(String, String)]) {
+            let heading = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            heading.isEnabled = false; bar.addItem(heading)
+            for (title, value) in options {
+                bar.addItem(action(title, #selector(setPreference(_:)), value: [key, value], checked: value == selected))
+            }
+        }
+        group("Accounts", key: "barAccounts", selected: preferences.accounts.rawValue,
+              options: [("Primary only", "primary"), ("Primary + Secondary", "primarySecondary"), ("All Accounts", "all")])
+        bar.addItem(.separator())
+        group("Style", key: "barStyle", selected: preferences.style.rawValue,
+              options: [("Percent", "percent"), ("Battery", "battery"), ("HP Bar", "hp"), ("Dual Bars", "dual"), ("Ring", "ring")])
+        bar.addItem(.separator())
+        group("Metric", key: "barMetric", selected: preferences.metric.rawValue,
+              options: [("5-Hour", "five"), ("Weekly", "seven"), ("Both", "both"), ("Most Used", "max")])
+        bar.addItem(.separator())
+        bar.addItem(action("Show Numbers", #selector(togglePreference(_:)), value: "barNumbers", checked: preferences.numbers))
+        bar.addItem(action("Always Show in Menu Bar", #selector(togglePreference(_:)), value: "menuBarAlways", checked: preferences.always))
+        let widget = submenu("Widget", in: menu)
+        for (title, value) in [("Primary only", "primary"), ("Primary + Secondary", "primarySecondary")] {
+            widget.addItem(action(title, #selector(setPreference(_:)), value: ["widgetAccounts", value],
+                                  checked: preferences.twoWidgets == (value == "primarySecondary")))
+        }
+        menu.addItem(action(panel?.isVisible == true ? "Minimize to Menu Bar" : "Show Widget",
+                            panel?.isVisible == true ? #selector(minimizeToMenuBar) : #selector(restoreFromMenuBar)))
+        menu.addItem(action("Refresh Now", #selector(refreshNow)))
+        menu.addItem(action("Usage Settings…", #selector(openUsageSettings)))
+        let login = submenu("This Mac's Login", in: menu)
+        if accounts.contains(where: { $0.machine_login }) {
+            login.addItem(action("Switch Account…", #selector(startLogin)))
+            login.addItem(action("Sign Out", #selector(confirmSignOut)))
+        } else { login.addItem(action("Sign In to Claude…", #selector(startLogin))) }
+        menu.addItem(.separator())
+        menu.addItem(action("Quit Claude Usage", #selector(quit)))
         return menu
     }
-
-    @objc func openUsageSettings() {
-        NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!)
+    @objc func makePrimary(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String, accounts.contains(where: { $0.id == id }) else { return }
+        let old = preferences.primary(in: accounts)?.id
+        if preferences.secondaryID == id { UserDefaults.standard.set(old ?? "none", forKey: "secondaryAccount") }
+        UserDefaults.standard.set(id, forKey: "primaryAccount")
+        updateUI()
+    }
+    @objc func makeSecondary(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String, id != preferences.primary(in: accounts)?.id else { return }
+        UserDefaults.standard.set(id, forKey: "secondaryAccount")
+        updateUI()
+    }
+    @objc func setPreference(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [String], pair.count == 2 else { return }
+        UserDefaults.standard.set(pair[1], forKey: pair[0]); updateUI()
+    }
+    @objc func togglePreference(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        UserDefaults.standard.set(sender.state != .on, forKey: key); updateUI()
     }
 
-    @objc func startLogin() {
-        postAuth(to: loginURL) { [weak self] ok in
-            guard let self else { return }
-            if ok {
-                // signing in is exactly when identity changes, so the staleness
-                // gate must not hold the old account on screen
-                self.lastAccountFetch = nil
-                self.refresh()
-                self.switchWatch?.invalidate()
-                let initialKey = self.lastAccountKey
-                let deadline = Date().addingTimeInterval(180)
-                // Browser OAuth takes longer than any fixed delay. Usage is
-                // cached 30s per credential, so this adds no upstream traffic
-                // until the key changes.
-                self.switchWatch = Timer.scheduledTimer(withTimeInterval: 5,
-                                                        repeats: true) { [weak self] timer in
-                    guard let self else {
-                        timer.invalidate()
-                        return
+    @objc func refreshNow() {
+        guard !refreshing else { refreshPending = true; return }
+        guard !accounts.isEmpty else { refresh(); return }
+        refreshing = true
+        let group = DispatchGroup()
+        for account in accounts {
+            var components = URLComponents(string: baseURL + "/api/refresh")!
+            components.queryItems = [URLQueryItem(name: "account", value: account.id)]
+            group.enter()
+            post(to: components.url!) { _ in group.leave() }
+        }
+        group.notify(queue: .main) { self.refreshing = false; self.refreshPending = false; self.refresh() }
+    }
+    @objc func refresh() {
+        guard !refreshing else { return }
+        refreshing = true
+        var request = URLRequest(url: URL(string: baseURL + "/api/accounts")!)
+        request.timeoutInterval = 100
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            // Only a missing route means an old server. Network/decode failures
+            // must never silently replace the registry with a single login.
+            if (response as? HTTPURLResponse)?.statusCode == 404 {
+                self.refreshLegacy(); return
+            }
+            let result = (response as? HTTPURLResponse)?.statusCode == 200
+                ? data.flatMap { try? JSONDecoder().decode(AccountsResponse.self, from: $0) } : nil
+            DispatchQueue.main.async { self.receive(result?.accounts) }
+        }.resume()
+    }
+    func receive(_ fresh: [UsageAccount]?) {
+        refreshing = false
+        if let fresh {
+            failCount = 0
+            for account in fresh where account.state == "ok" {
+                if let old = previous[account.id], old.state == "ok" {
+                    func reset(_ before: LimitInfo?, _ after: LimitInfo?) -> Bool {
+                        guard let before, let after, before.value != nil, after.value != nil else { return false }
+                        if let oldDate = before.resets_at.flatMap(parseISO) {
+                            if let newDate = after.resets_at.flatMap(parseISO) { return newDate > oldDate }
+                            return after.value == 0 && oldDate <= Date()
+                        }
+                        return false
                     }
-                    if Date() >= deadline
-                        || (self.lastAccountKey != nil && self.lastAccountKey != initialKey) {
-                        timer.invalidate()
-                        self.switchWatch = nil
-                        return
+                    if reset(old.five_hour, account.five_hour) || reset(old.seven_day, account.seven_day) {
+                        danceEnds[account.id] = Date().addingTimeInterval(8)
                     }
-                    self.refresh()
                 }
-            } else {
-                self.showAuthError("Could not start Claude sign in.")
+                previous[account.id] = account
+            }
+            accounts = fresh
+            if preferences.primaryID == nil, let primary = preferences.primary(in: fresh) {
+                UserDefaults.standard.set(primary.id, forKey: "primaryAccount")
+            }
+        } else {
+            failCount += 1
+            // Keep the snapshot visibly stale from the first transport failure.
+            accounts = accounts.map { var a = $0; if a.state == "ok" { a.state = "stale" }; return a }
+        }
+        updateUI()
+        if refreshPending { refreshPending = false; refreshNow() }
+    }
+    func refreshLegacy() {
+        URLSession.shared.dataTask(with: URL(string: baseURL + "/api/usage")!) { data, response, _ in
+            guard (response as? HTTPURLResponse)?.statusCode == 200, let data,
+                  let usage = try? JSONDecoder().decode(Usage.self, from: data) else {
+                DispatchQueue.main.async { self.receive(nil) }; return
+            }
+            URLSession.shared.dataTask(with: URL(string: baseURL + "/api/account")!) { data, _, _ in
+                guard let data, let account = try? JSONDecoder().decode(AccountInfo.self, from: data) else {
+                    DispatchQueue.main.async { self.receive(nil) }; return
+                }
+                var items: [UsageAccount] = []
+                if account.logged_in && usage.logged_in != false {
+                    items = [UsageAccount(id: "machine", label: account.name ?? "This Mac", email: account.email,
+                                          plan: account.plan, source: "keychain", machine_login: true,
+                                          five_hour: usage.five_hour, seven_day: usage.seven_day,
+                                          limits: usage.limits, fetched_at: usage.fetched_at)]
+                }
+                let result = items
+                DispatchQueue.main.async { self.receive(result) }
+            }.resume()
+        }.resume()
+    }
+
+    func post(to url: URL, completion: @escaping (Bool) -> Void) {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 100
+        request.setValue("1", forHTTPHeaderField: "X-Widget")
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            DispatchQueue.main.async { completion((200..<300).contains((response as? HTTPURLResponse)?.statusCode ?? 0)) }
+        }.resume()
+    }
+    @objc func startLogin() {
+        post(to: URL(string: baseURL + "/api/login")!) { [weak self] ok in
+            guard let self else { return }
+            guard ok else { self.showAuthError("Could not start Claude sign in."); return }
+            self.refresh()
+            self.switchWatch?.invalidate()
+            let deadline = Date().addingTimeInterval(180)
+            self.switchWatch = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] timer in
+                if Date() >= deadline { timer.invalidate(); return }
+                self?.refresh()
             }
         }
     }
-
     @objc func confirmSignOut() {
-        let email = account.email ?? "the current account"
+        let email = accounts.first(where: { $0.machine_login })?.email ?? "the current account"
         let alert = NSAlert()
         alert.messageText = "Sign out of Claude Code?"
         alert.informativeText = "This signs out \(email). The claude CLI on this Mac will need a fresh login."
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Sign Out")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Sign Out"); alert.addButton(withTitle: "Cancel")
         alert.buttons[0].hasDestructiveAction = true
         alert.buttons[0].keyEquivalent = ""
         alert.buttons[1].keyEquivalent = "\r"
         alert.window.defaultButtonCell = alert.buttons[1].cell as? NSButtonCell
-        // accessory apps have no menu-bar focus, so the sheet can open behind
-        // whatever is frontmost unless we take activation first
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        postAuth(to: logoutURL) { [weak self] ok in
-            guard let self else { return }
-            if ok {
-                self.lastAccountFetch = nil
-                self.account = AccountInfo(logged_in: false)
-                self.latestUsage = nil
-                self.view.signedOut = true
-                self.view.offline = false
-                self.updateStatusItem()
-                self.view.needsDisplay = true
-                self.refresh()
-            } else {
-                self.showAuthError("Could not sign out of Claude Code.")
-            }
+        post(to: URL(string: baseURL + "/api/logout")!) { [weak self] ok in
+            if ok { self?.refresh() } else { self?.showAuthError("Could not sign out of Claude Code.") }
         }
     }
-
-    private func postAuth(to url: URL, completion: @escaping (Bool) -> Void) {
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("1", forHTTPHeaderField: "X-Widget")
-        URLSession.shared.dataTask(with: request) { _, response, _ in
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            DispatchQueue.main.async { completion((200..<300).contains(status)) }
-        }.resume()
-    }
-
-    private func showAuthError(_ message: String) {
-        let alert = NSAlert()
-        alert.messageText = message
+    func showAuthError(_ message: String) {
+        let alert = NSAlert(); alert.messageText = message
         alert.informativeText = "Make sure the local usage server and Claude Code are installed."
-        NSApp.activate(ignoringOtherApps: true)
-        alert.runModal()
+        NSApp.activate(ignoringOtherApps: true); alert.runModal()
     }
-
+    @objc func openUsageSettings() { NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!) }
     @objc func quit() { NSApp.terminate(nil) }
-
     func ensureServer() {
-        URLSession.shared.dataTask(with: pingURL) { data, _, _ in
-            if data == nil {
-                let p = Process()
-                p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-                p.arguments = [widgetDir + "/server.py"]
-                p.standardOutput = nil
-                p.standardError = nil
-                try? p.run()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { self.refresh() }
-            }
-        }.resume()
-    }
-
-    // Identity changes only at sign in or sign out, so polling it on the same
-    // 60s clock as usage would double this app's API traffic for nothing.
-    private var lastAccountFetch: Date?
-    private var lastAccountKey: String?
-    private var switchWatch: Timer?
-    private let accountMaxAge: TimeInterval = 10 * 60
-
-    private func refreshAccountIfStale() {
-        if let last = lastAccountFetch, Date().timeIntervalSince(last) < accountMaxAge {
-            return
-        }
-        refreshAccount()
-    }
-
-    private func refreshAccount() {
-        URLSession.shared.dataTask(with: accountURL) { data, _, _ in
-            guard let data, let account = try? JSONDecoder().decode(AccountInfo.self, from: data) else {
-                return
-            }
-            DispatchQueue.main.async {
-                // a fallback answer (profile lookup failed) must not be pinned
-                // for the full 10 minutes: the server retries after 60s, so let
-                // the next usage tick ask again and heal the header
-                self.lastAccountFetch = (account.profile_ok == false) ? nil : Date()
-                self.account = account
-                self.view.signedOut = !account.logged_in
-                if !account.logged_in { self.view.offline = false }
-                self.updateStatusItem()
-                self.view.needsDisplay = true
-            }
-        }.resume()
-    }
-
-    @objc func refresh() {
-        refreshAccountIfStale()
-        URLSession.shared.dataTask(with: apiURL) { data, _, _ in
-            DispatchQueue.main.async {
-                guard let data, let u = try? JSONDecoder().decode(Usage.self, from: data) else {
-                    // transient failure: keep the last known values on screen;
-                    // only flag offline after 3 misses in a row (~3 min)
-                    self.failCount += 1
-                    if self.failCount >= 3, !self.view.signedOut { self.view.offline = true }
-                    self.view.needsDisplay = true
-                    return
-                }
-                self.failCount = 0
-                self.latestUsage = u
-
-                if u.logged_in == false {
-                    self.lastAccountKey = nil
-                    self.lastAccountFetch = nil
-                    self.account = AccountInfo(logged_in: false)
-                    self.view.signedOut = true
-                    self.view.offline = false
-                    self.updateStatusItem()
-                    self.view.needsDisplay = true
-                    return
-                }
-                self.view.signedOut = false
-                let keyChanged = u.account_key != nil && self.lastAccountKey != nil
-                    && u.account_key != self.lastAccountKey
-                if let key = u.account_key { self.lastAccountKey = key }
-                // A credential changed under us: switch account, terminal login,
-                // or token rotation. Re-ask instead of waiting for the gate.
-                if keyChanged || !self.account.logged_in {
-                    self.lastAccountFetch = nil
-                    self.refreshAccount()
-                }
-
-                // A limit that just reset can come back with resets_at = null:
-                // that is a fresh window, not a disconnect. Show the pct with
-                // "READY" instead of wiping the row.
-                func conv(_ l: LimitInfo?) -> (Double, String)? {
-                    guard let l, let p = l.utilization else { return nil }
-                    if let rs = l.resets_at, let d = parseISO(rs) { return (p, fmtWhen(d)) }
-                    return (p, "READY")
-                }
-                // keep previous values when a field is missing entirely
-                if let f = conv(u.five_hour) { self.view.five = f }
-                if let s = conv(u.seven_day) { self.view.seven = s }
-                self.view.offline = (self.view.five == nil && self.view.seven == nil)
-
-                // celebrate a reset: resets_at changed to a later window
-                let r5 = u.five_hour?.resets_at
-                let r7 = u.seven_day?.resets_at
-                if (self.lastReset5 != nil && r5 != self.lastReset5)
-                    || (self.lastReset7 != nil && r7 != self.lastReset7) {
-                    self.view.danceUntil = self.view.t + 8
-                }
-                if r5 != nil { self.lastReset5 = r5 }
-                if r7 != nil { self.lastReset7 = r7 }
-
-                self.updateStatusItem()
-                self.view.needsDisplay = true
-            }
+        URLSession.shared.dataTask(with: URL(string: baseURL + "/api/ping")!) { data, _, _ in
+            guard data == nil else { return }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            process.arguments = [widgetDir + "/server.py"]
+            process.standardOutput = nil; process.standardError = nil
+            try? process.run()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.refresh() }
         }.resume()
     }
 }
 
-final class MenuPreviewCanvas: NSView {
-    override func draw(_ dirtyRect: NSRect) {
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
-                                xRadius: 8, yRadius: 8)
-        NSColor.windowBackgroundColor.setFill()
-        path.fill()
-        NSColor.separatorColor.setStroke()
-        path.lineWidth = 1
-        path.stroke()
-    }
+if CommandLine.arguments.count >= 2, CommandLine.arguments[1].hasPrefix("--preview-") {
+    guard CommandLine.arguments.count >= 3 else { exit(2) }
+    exit(renderPreview(kind: CommandLine.arguments[1], path: CommandLine.arguments[2],
+                       dark: CommandLine.arguments.contains("--dark"),
+                       signedOut: CommandLine.arguments.contains("--signed-out"),
+                       two: CommandLine.arguments.contains("--two")))
 }
-
-func renderMenuPreview(path: String, dark: Bool, signedOut: Bool) -> Int32 {
-    _ = NSApplication.shared
-    NSApp.setActivationPolicy(.prohibited)
-    let now = Date()
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    func reset(after seconds: TimeInterval) -> String {
-        formatter.string(from: now.addingTimeInterval(seconds + 60))
-    }
-
-    let account = signedOut
-        ? AccountInfo(logged_in: false)
-        : AccountInfo(logged_in: true, email: "kriengkrai.pho@gmail.com",
-                      name: "heng", plan: "max")
-    let usage = signedOut ? nil : Usage(
-        limits: [
-            LimitInfo(resets_at: reset(after: 3 * 60 * 60), kind: "session",
-                      group: "session", percent: 24),
-            LimitInfo(resets_at: reset(after: 5 * 24 * 60 * 60), kind: "weekly_all",
-                      group: "weekly", percent: 8),
-            LimitInfo(resets_at: reset(after: 5 * 24 * 60 * 60), kind: "weekly_scoped",
-                      group: "weekly", percent: 94,
-                      scope: LimitScope(model: LimitModel(display_name: "Fable"))),
-        ],
-        fetched_at: now.addingTimeInterval(-15).timeIntervalSince1970,
-        logged_in: true)
-    let items = UsageMenuViews.items(account: account, usage: usage, now: now)
-    let padding: CGFloat = 8
-    let height = items.reduce(padding * 2) { $0 + ($1.view?.frame.height ?? 0) }
-    let canvas = MenuPreviewCanvas(frame: NSRect(x: 0, y: 0, width: 336, height: height))
-    canvas.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-
-    var y = height - padding
-    for item in items {
-        guard let view = item.view else { continue }
-        item.view = nil
-        y -= view.frame.height
-        view.frame.origin = NSPoint(x: padding, y: y)
-        view.isHidden = false
-        canvas.addSubview(view)
-    }
-    canvas.layoutSubtreeIfNeeded()
-    guard let bitmap = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds) else {
-        return 1
-    }
-    guard let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return 1 }
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = context
-    canvas.displayIgnoringOpacity(canvas.bounds, in: context)
-    func drawSubviews(of parent: NSView) {
-        for view in parent.subviews where !view.isHidden {
-            NSGraphicsContext.saveGraphicsState()
-            let transform = NSAffineTransform()
-            transform.translateX(by: view.frame.minX, yBy: view.frame.minY)
-            transform.concat()
-            view.displayIgnoringOpacity(view.bounds, in: context)
-            drawSubviews(of: view)
-            NSGraphicsContext.restoreGraphicsState()
-        }
-    }
-    drawSubviews(of: canvas)
-    NSGraphicsContext.restoreGraphicsState()
-    guard let data = bitmap.representation(using: .png, properties: [:]) else {
-        return 1
-    }
-    do {
-        try data.write(to: URL(fileURLWithPath: path))
-        return 0
-    } catch {
-        return 1
-    }
-}
-
-if CommandLine.arguments.count >= 3,
-   CommandLine.arguments[1] == "--preview-menu" {
-    let arguments = Array(CommandLine.arguments.dropFirst(2))
-    exit(renderMenuPreview(path: arguments[0],
-                           dark: arguments.contains("--dark"),
-                           signedOut: arguments.contains("--signed-out")))
-}
-
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
