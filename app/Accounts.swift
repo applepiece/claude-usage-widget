@@ -18,14 +18,19 @@ struct UsageAccount: Decodable {
     var state = "ok"
     var fetched_at: Double?
     var expires_at: String?
+    var provider: String?
+    var as_of: Double?
+    var quota_source: String?
 
+    var isCodex: Bool { provider == "codex" }
+    var providerName: String { isCodex ? "Codex" : "Claude" }
     var failed: Bool { state == "error" || state == "token_rejected" }
     var usage: Usage {
         Usage(five_hour: five_hour, seven_day: seven_day, limits: limits,
-              fetched_at: fetched_at, logged_in: true)
+              fetched_at: as_of ?? fetched_at, logged_in: true)
     }
     var info: AccountInfo {
-        AccountInfo(logged_in: true, email: email, name: label, plan: plan)
+        AccountInfo(logged_in: true, email: email, name: label, plan: plan, provider: provider)
     }
     var highest: Double? { [five_hour?.value, seven_day?.value].compactMap { $0 }.max() }
 }
@@ -82,8 +87,29 @@ func accountTags(_ accounts: [UsageAccount]) -> [String: String] {
     var tags: [String: String] = [:]
     for account in accounts {
         let first = String(account.label.prefix(1)).uppercased()
-        let collide = accounts.filter { String($0.label.prefix(1)).uppercased() == first }.count > 1
-        tags[account.id] = String(account.label.prefix(collide ? 2 : 1)).uppercased()
+        let collide = accounts.filter {
+            $0.isCodex == account.isCodex && String($0.label.prefix(1)).uppercased() == first
+        }.count > 1
+        tags[account.id] = (account.isCodex ? "›" : "") + String(account.label.prefix(collide ? 2 : 1)).uppercased()
+    }
+    var used = Set<String>()
+    for account in accounts {
+        let prefix = account.isCodex ? "›" : ""
+        let label = account.label.uppercased()
+        var tag = tags[account.id] ?? prefix
+        var length = tag.count - prefix.count
+        var suffix = 2
+        while used.contains(tag) {
+            if length < label.count {
+                length += 1
+                tag = prefix + String(label.prefix(length))
+            } else {
+                tag = prefix + label + String(suffix)
+                suffix += 1
+            }
+        }
+        used.insert(tag)
+        tags[account.id] = tag
     }
     return tags
 }
@@ -96,7 +122,7 @@ func powerColor(_ used: Double?) -> NSColor {
 }
 
 // All status content is a single image. Measurements happen before drawing so
-// three accounts stay below 160pt without scaling text to an unreadable size.
+// five accounts stay below 160pt without scaling text to an unreadable size.
 enum StatusRenderer {
     static func image(accounts: [UsageAccount], tags: [String: String], style: BarStyle,
                       metric: BarMetric, numbers: Bool, appearance: NSAppearance) -> NSImage {
@@ -108,10 +134,14 @@ enum StatusRenderer {
             func size(_ text: String, _ font: NSFont) -> CGFloat {
                 ceil((text as NSString).size(withAttributes: [.font: font]).width)
             }
+            // Percent has nothing but its numbers, so too many accounts first
+            // drop the % signs, then fall back to each account's highest window.
+            var compact = false
+            var shownMetric = metric
             func values(_ account: UsageAccount) -> [Double?] {
                 if account.failed { return [nil] }
                 if style == .dual || style == .ring { return [account.five_hour?.value, account.seven_day?.value] }
-                switch metric {
+                switch shownMetric {
                 case .five: return [account.five_hour?.value]
                 case .seven: return [account.seven_day?.value]
                 case .both: return [account.five_hour?.value, account.seven_day?.value]
@@ -121,7 +151,7 @@ enum StatusRenderer {
             func text(_ account: UsageAccount) -> String {
                 if account.failed { return "!" }
                 let parts = values(account).map { $0.map { String(Int($0.rounded())) } ?? "–" }
-                return parts.joined(separator: "·") + (parts.count == 1 && parts[0] != "–" ? "%" : "")
+                return parts.joined(separator: "·") + (!compact && parts.count == 1 && parts[0] != "–" ? "%" : "")
             }
             let baseGaugeWidth: CGFloat
             switch style {
@@ -140,7 +170,10 @@ enum StatusRenderer {
                 }
             }
             var showNumbers = numbers
-            if width(showNumbers: showNumbers, spacing: 5) >= 160 { showNumbers = false }
+            if style == .percent, showNumbers {
+                if width(showNumbers: true, spacing: accounts.count > 2 ? 3 : 5) >= 160 { compact = true }
+                if width(showNumbers: true, spacing: accounts.count > 2 ? 3 : 5) >= 160 { shownMetric = .max }
+            } else if width(showNumbers: showNumbers, spacing: 5) >= 160 { showNumbers = false }
             // Errors and absent metrics always need their textual state, even
             // when numbers are hidden; budget one small marker per gauge.
             func marker(_ a: UsageAccount) -> String {

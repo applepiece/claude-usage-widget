@@ -72,15 +72,18 @@ struct AccountInfo: Decodable {
     // false when the profile lookup failed, so name/org are local fallbacks and
     // this answer is worth asking again sooner than the normal staleness gate
     let profile_ok: Bool?
+    let provider: String?
 
     init(logged_in: Bool, email: String? = nil, name: String? = nil,
-         plan: String? = nil, org: String? = nil, profile_ok: Bool? = nil) {
+         plan: String? = nil, org: String? = nil, profile_ok: Bool? = nil,
+         provider: String? = nil) {
         self.logged_in = logged_in
         self.email = email
         self.name = name
         self.plan = plan
         self.org = org
         self.profile_ok = profile_ok
+        self.provider = provider
     }
 }
 
@@ -243,7 +246,8 @@ final class AccountHeaderView: NSView {
         let name = account.logged_in
             ? ((knownName?.isEmpty == false ? knownName : nil) ?? fallbackName)
             : "Not signed in"
-        let detail = account.logged_in ? email : "Sign in to see your usage"
+        let provider = account.provider.map { $0 == "codex" ? "Codex" : "Claude" }
+        let detail = account.logged_in ? (provider.map { $0 + " · " } ?? "") + email : "Sign in to see your usage"
         let nameLabel = menuLabel(name, size: 13.5, weight: .semibold,
                                   color: .labelColor)
         let emailLabel = menuLabel(detail, size: 11.5, weight: .regular,
@@ -272,11 +276,24 @@ final class AccountHeaderView: NSView {
     required init?(coder: NSCoder) { nil }
 
     override func draw(_ dirtyRect: NSRect) {
-        let avatarColor = account.logged_in ? clawdSalmon : NSColor.tertiaryLabelColor
+        let isCodex = account.provider == "codex"
+        let avatarColor = isCodex ? NSColor(red: 0.27, green: 0.31, blue: 0.38, alpha: 1)
+            : (account.logged_in ? clawdSalmon : NSColor.tertiaryLabelColor)
         avatarColor.setFill()
-        NSBezierPath(ovalIn: NSRect(x: 14, y: bounds.height - 46, width: 34, height: 34)).fill()
-        drawClawdGlyph(in: NSRect(x: 21, y: bounds.height - 36, width: 20, height: 14),
-                       color: .white, eyeColor: avatarColor)
+        let circle = NSRect(x: 14, y: bounds.height - 46, width: 34, height: 34)
+        NSBezierPath(ovalIn: circle).fill()
+        if isCodex {
+            let glyph = "›_" as NSString
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.monospacedSystemFont(ofSize: 16, weight: .bold), .foregroundColor: NSColor.white,
+            ]
+            let size = glyph.size(withAttributes: attributes)
+            glyph.draw(at: NSPoint(x: circle.midX - size.width / 2, y: circle.midY - size.height / 2),
+                       withAttributes: attributes)
+        } else {
+            drawClawdGlyph(in: NSRect(x: 21, y: bounds.height - 36, width: 20, height: 14),
+                           color: .white, eyeColor: avatarColor)
+        }
 
         // inset hairline: identity above, usage below. Drawn in the view rather
         // than as a menu separator so the preview renderer shows it too. Signed

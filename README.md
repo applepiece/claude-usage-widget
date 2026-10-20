@@ -1,4 +1,4 @@
-# Claude Usage Widget 2.0 🦀
+# Claude Usage Widget 2.1 🦀
 
 A tiny native macOS floating widget and menu-bar app for Claude subscription
 usage, with Claw'd as an animated pixel-art companion. AppKit only, macOS 13+.
@@ -59,6 +59,37 @@ Server configuration (stdlib Python 3.9+, no packages):
 | `CLAUDE_USAGE_PROBE_MODEL` | `claude-haiku-4-5-20251001` |
 | `CLAUDE_USAGE_PROBE_SECONDS` | `600` (minimum `120` for automatic polling) |
 
+### Codex accounts
+
+Codex logins appear after Claude accounts, in the order of
+`CODEX_BRIDGE_ACCOUNTS=pro:~/.codex,edu:~/.codex-edu` in
+`~/.config/codex-bridge/env`. Exported or quoted values are supported; duplicate
+labels keep the first entry. If the file or variable is missing, an existing
+`~/.codex` directory appears as **codex**. The server never reads `auth.json`.
+
+Live quotas come from `codex app-server`, using `account/read` for identity and
+`account/rateLimits/read` for usage. This costs no credits, takes about 2 seconds,
+and runs at most every 5 minutes per login by default. Refresh Now can request a
+new read after 60 seconds. The CLI runs with that login's `CODEX_HOME`, an
+extended PATH for Node, and without API key environment overrides. Weekly-only
+plans leave the 5-hour window unavailable.
+
+On each poll the server checks the newest `sessions/**/rollout-*.jsonl` by mtime
+and caches its last 256 KB of quota data. A newer rollout snapshot overlays live
+numbers; if the live read fails, rollout data supplies a **stale** fallback.
+Freshness uses the rollout event's timestamp. Expired rollout windows show 0%
+with no reset time. A signed-out login clears usage and shows **token rejected**.
+
+Codex tags start with **›**, such as **›P** and **›E**. Claude tags are computed
+separately, so **pho** stays **P** beside Codex **pro**. Menus show provider names,
+separate settings links, and the renewal hint `bridge-accounts/login-all.sh codex`.
+
+| Variable | Default |
+| --- | --- |
+| `CLAUDE_USAGE_CODEX_ENV` | `~/.config/codex-bridge/env` (override is a literal path) |
+| `CLAUDE_USAGE_CODEX_BIN` | First executable in `~/.local/bin/codex`, `/opt/homebrew/bin/codex`, `/usr/local/bin/codex`, then extended PATH |
+| `CLAUDE_USAGE_CODEX_SECONDS` | `300` (minimum `60`; invalid values use `300`) |
+
 ### Account menu and display options
 
 The primary account's full section comes first, marked **PRIMARY**, followed by
@@ -81,7 +112,9 @@ open one for its full rows, **Make Primary** and **Make Secondary**.
   a battery/HP fill shows capacity **left**. Green means below 70% used, amber
   70–89%, red 90%+. Missing windows show **–**; errors show **!** without fill.
   Spacing shrinks and numbers drop as needed to keep the status image below
-  160 points. Percent with numbers hidden gives an icon-only status item.
+  160 points. Percent never drops its numbers for width: it first drops the %
+  signs, then shows each account's highest window. Percent with Show Numbers
+  off gives an icon-only status item.
 - **Always Show in Menu Bar**: on by default; turn it off for the old behavior
   where the status item appears only while minimized. Left-click shows the
   widget; right-click or Control-click opens the menu.
@@ -118,8 +151,8 @@ Uninstall with `./uninstall.sh`.
 The app starts `/usr/bin/python3 server.py` from
 `~/Library/Application Support/claude-usage-widget`. The server binds only to
 **127.0.0.1:8737**, checks Host on GETs, and requires the existing **X-Widget: 1**
-and absent Origin guard for POSTs. Tokens are read only inside the server and
-sent only to Anthropic for authentication; they are never logged or returned to
+and absent Origin guard for POSTs. Claude tokens are read only inside the server
+and sent only to Anthropic for authentication; they are never logged or returned to
 the UI. Bridge tokens remain in their existing protected files. The registry API
 returns selected identity fields and parsed usage values, without credentials,
 fingerprints, organization headers or arbitrary upstream headers.
@@ -154,8 +187,10 @@ contacting the server. Output paths below stay in the ignored build directory.
 .build/ClaudeUsage --preview-widget .build/widget-two-dark.png --dark --two
 ```
 
-Menu samples: pho 15%/82% (machine login), kkpk 0%/37%, mahidol 4%/no weekly.
-The status grid covers every style × accounts mode, plus an error account.
+Menu samples: pho 15%/82% (machine login), kkpk 0%/37%, mahidol 4%/no weekly,
+Codex pro no 5-hour/12% weekly, and Codex edu 1%/0%. Menu and two-account widget
+previews select pho and codex-pro. The status grid covers every style × accounts
+mode with all five samples, plus Claude and Codex rejected-account rows.
 All three preview modes support `--dark`; the widget supports `--two` and the
 menu supports `--signed-out`. Visual QA is separate from compilation. Generate all ten light/dark previews with
 `bash tests/preview_checks.sh` outside the sandbox, then inspect the PNGs in
@@ -163,7 +198,7 @@ menu supports `--signed-out`. Visual QA is separate from compilation. Generate a
 
 ## สำหรับผู้ใช้ภาษาไทย
 
-เวอร์ชัน 2.0 แสดงการใช้ Claude หลายบัญชี ทั้ง login ของ Claude Code ใน Keychain
+เวอร์ชัน 2.1 แสดงการใช้ Claude และ Codex หลายบัญชี ทั้ง login ของ Claude Code ใน Keychain
 และ token จาก `~/.config/claude-bridge/accounts/<label>.token` พร้อมไฟล์ `.json`
 ที่ระบุ email และ `org_uuid` เรียงตาม `CLAUDE_BRIDGE_ACCOUNTS` ในไฟล์ bridge `env`
 ก่อน แล้วตามตัวอักษร หาก org ตรงกันจะรวมเป็นบัญชีเดียว; login ที่ไม่ตรงแสดงเป็น
@@ -190,7 +225,8 @@ Make Secondary** เลือกบัญชีหลักจาก **Primary A
 - **Metric**: 5-Hour / Weekly / Both / Most Used (ค่าเริ่มต้น เลือกค่าสูงสุด)
 - **Show Numbers** เปิดเป็นค่าเริ่มต้น สีเขียวเมื่อใช้ต่ำกว่า 70%, เหลือง 70–89%,
   แดงตั้งแต่ 90%; ข้อมูลหายเป็น **–**, ข้อผิดพลาดเป็น **!** และไม่มีแถบเติม
-  ซ่อนตัวเลขอัตโนมัติเมื่อพื้นที่ไม่พอ โหมด Percent ที่ปิดตัวเลขเหลือไอคอนอย่างเดียว
+  ซ่อนตัวเลขอัตโนมัติเมื่อพื้นที่ไม่พอ ยกเว้นโหมด Percent ที่ตัดเครื่องหมาย % ก่อน
+  แล้วค่อยแสดงเฉพาะรอบที่ใช้มากสุด โหมด Percent ที่ปิดตัวเลขเหลือไอคอนอย่างเดียว
 - **Always Show in Menu Bar** เปิดเป็นค่าเริ่มต้น ปิดเพื่อให้แสดงเฉพาะตอนย่อ widget
 - **Widget**: Primary only / Primary + Secondary ขยายพื้นที่สำหรับบัญชีรอง
   มีป้ายชื่อย่อ แถบส้ม 5 ชั่วโมง แถบม่วงรายสัปดาห์ น้อง Claw'd เปลี่ยนท่าตามบัญชีหลัก
@@ -208,6 +244,32 @@ Make Secondary** เลือกบัญชีหลักจาก **Primary A
 `--preview-statusbar <png> [--dark]`, `--preview-widget <png> [--dark] [--two]`
 ตามตัวอย่างด้านบน ต้องรันนอก sandbox บน Mac ที่เข้าถึง WindowServer ได้
 โหมด preview ไม่แสดงหน้าต่างและไม่ติดต่อ server
+
+### บัญชี Codex
+
+อ่านรายการจาก `CODEX_BRIDGE_ACCOUNTS=pro:~/.codex,edu:~/.codex-edu` ใน
+`~/.config/codex-bridge/env` แล้วแสดงหลังบัญชี Claude ตามลำดับในไฟล์ รองรับ
+`export` และเครื่องหมายคำพูด หากไม่มีไฟล์หรือตัวแปร จะใช้ `~/.codex` เมื่อมี
+โฟลเดอร์นี้เท่านั้น เซิร์ฟเวอร์ไม่อ่าน `auth.json` และไม่แก้ไฟล์ login
+
+ข้อมูลสดมาจาก `codex app-server` โดยอ่านตัวตนด้วย `account/read` และโควต้าด้วย
+`account/rateLimits/read` ไม่เสียเครดิต ใช้เวลาประมาณ 2 วินาที และอ่านอัตโนมัติ
+ไม่ถี่กว่า 5 นาทีต่อ login ตามค่าเริ่มต้น กด Refresh Now ได้หลังอ่านครั้งก่อน
+อย่างน้อย 60 วินาที หากแผนมีเฉพาะรายสัปดาห์ ช่อง 5 ชั่วโมงจะแสดงว่าไม่มีข้อมูล
+
+ทุกครั้งที่ poll จะตรวจ rollout ล่าสุดใน `sessions/**/rollout-*.jsonl` ตาม mtime
+และ cache ผลที่อ่านจากท้ายไฟล์ 256 KB หาก timestamp ใหม่กว่าข้อมูลสดจะใช้แทน
+หากอ่านสดล้มเหลวจะใช้ rollout พร้อมสถานะ stale ความสดอ้างอิงเวลาของ event
+รอบที่หมดอายุแล้วจะแสดง 0% และไม่มีเวลารีเซ็ต เมื่อ sign out จะล้างโควต้า
+
+ป้าย Codex มี **›** นำหน้า เช่น **›P**, **›E** และคำนวณแยกจาก Claude
+จึงยังใช้ **P** สำหรับ pho แม้มี pro เมนูระบุ provider และแยกลิงก์ Usage Settings
+คำแนะนำต่ออายุคือ `bridge-accounts/login-all.sh codex`
+
+ตั้งไฟล์รายการด้วย `CLAUDE_USAGE_CODEX_ENV` (ใช้ path ตามที่กำหนด ไม่ขยาย `~`
+ในตัวแปรนี้), ตั้ง CLI ด้วย `CLAUDE_USAGE_CODEX_BIN` และตั้งช่วงอ่านสดด้วย
+`CLAUDE_USAGE_CODEX_SECONDS` ค่าเริ่มต้น 300 วินาที ขั้นต่ำ 60 วินาที
+ค่าที่ไม่ถูกต้องใช้ 300 วินาที โดยไม่ต้องเปิดหรืออ่าน `auth.json`
 
 ## Credits & license
 

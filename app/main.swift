@@ -1,4 +1,4 @@
-// Claude Usage 2.0 — AppKit only. Credentials stay in the local Python server.
+// Claude Usage 2.1 · AppKit only. Credentials stay in the local Python server.
 import Cocoa
 import ServiceManagement
 
@@ -120,7 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                              style: preferences.style, metric: preferences.metric,
                                              numbers: preferences.numbers, appearance: button.effectiveAppearance)
         button.toolTip = accounts.isEmpty ? "Claude Usage · No accounts" : preferences.shown(in: accounts).map {
-            "\($0.label): 5H \(percentage($0.five_hour)), WK \(percentage($0.seven_day)) · \($0.state)"
+            "\($0.label) · \($0.providerName): 5H \(percentage($0.five_hour)), WK \(percentage($0.seven_day)) · \($0.state)"
         }.joined(separator: "\n")
         button.setAccessibilityLabel(button.toolTip)
     }
@@ -183,7 +183,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(item)
         }
         if account.state == "token_rejected" {
-            let hint = NSMenuItem(title: "Renew: scripts/add-account.sh \(account.id)", action: nil, keyEquivalent: "")
+            let title = account.isCodex ? "Renew: bridge-accounts/login-all.sh codex" : "Renew: scripts/add-account.sh \(account.id)"
+            let hint = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             hint.isEnabled = false; menu.addItem(hint)
         }
     }
@@ -197,22 +198,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let secondary { menu.addItem(.separator()); section(secondary, role: "SECONDARY", in: menu) }
         let others = accounts.filter { $0.id != primary?.id && $0.id != secondary?.id }
+        let tags = accountTags(accounts)
         if !others.isEmpty { menu.addItem(.separator()) }
-        for account in others {
-            let summary = account.failed ? account.state.replacingOccurrences(of: "_", with: " ")
-                : "5H \(percentage(account.five_hour)) · WK \(percentage(account.seven_day))" + (account.state == "stale" ? " · stale" : "")
-            let sub = submenu("\(account.label) · \(summary)", in: menu)
-            section(account, in: sub)
-            sub.addItem(.separator())
-            sub.addItem(action("Make Primary", #selector(makePrimary(_:)), value: account.id))
-            sub.addItem(action("Make Secondary", #selector(makeSecondary(_:)), value: account.id))
+        let mixed = others.contains { $0.isCodex } && others.contains { !$0.isCodex }
+        let grouped = [others.filter { !$0.isCodex }, others.filter { $0.isCodex }].filter { !$0.isEmpty }
+        for group in grouped {
+            if mixed {
+                if #available(macOS 14.0, *) { menu.addItem(.sectionHeader(title: group[0].providerName)) } else {
+                    let heading = NSMenuItem(title: group[0].providerName, action: nil, keyEquivalent: "")
+                    heading.isEnabled = false; menu.addItem(heading)
+                }
+            }
+            for account in group {
+                let summary = account.failed ? account.state.replacingOccurrences(of: "_", with: " ")
+                    : "5H \(percentage(account.five_hour)) · WK \(percentage(account.seven_day))" + (account.state == "stale" ? " · stale" : "")
+                let sub = submenu("\(tags[account.id] ?? "?")  \(account.label) · \(summary)", in: menu)
+                section(account, in: sub)
+                sub.addItem(.separator())
+                sub.addItem(action("Make Primary", #selector(makePrimary(_:)), value: account.id))
+                sub.addItem(action("Make Secondary", #selector(makeSecondary(_:)), value: account.id))
+            }
         }
         menu.addItem(.separator())
         let primaryMenu = submenu("Primary Account", in: menu)
         let secondaryMenu = submenu("Secondary Account", in: menu)
         secondaryMenu.addItem(action("None", #selector(makeSecondary(_:)), value: "none", checked: secondary == nil))
         for account in accounts {
-            let title = account.label + (account.email.map { " — " + $0 } ?? "")
+            let title = account.providerName + " · " + account.label + (account.email.map { " · " + $0 } ?? "")
             primaryMenu.addItem(action(title, #selector(makePrimary(_:)), value: account.id, checked: account.id == primary?.id))
             if account.id != primary?.id {
                 secondaryMenu.addItem(action(title, #selector(makeSecondary(_:)), value: account.id, checked: account.id == secondary?.id))
@@ -245,9 +257,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(action(panel?.isVisible == true ? "Minimize to Menu Bar" : "Show Widget",
                             panel?.isVisible == true ? #selector(minimizeToMenuBar) : #selector(restoreFromMenuBar)))
         menu.addItem(action("Refresh Now", #selector(refreshNow)))
-        menu.addItem(action("Usage Settings…", #selector(openUsageSettings)))
+        let hasCodex = accounts.contains { $0.isCodex }
+        menu.addItem(action(hasCodex ? "Claude Usage Settings…" : "Usage Settings…", #selector(openUsageSettings)))
+        if hasCodex { menu.addItem(action("Codex Usage Settings…", #selector(openCodexUsageSettings))) }
         let login = submenu("This Mac's Login", in: menu)
-        if accounts.contains(where: { $0.machine_login }) {
+        if accounts.contains(where: { !$0.isCodex && $0.machine_login }) {
             login.addItem(action("Switch Account…", #selector(startLogin)))
             login.addItem(action("Sign Out", #selector(confirmSignOut)))
         } else { login.addItem(action("Sign In to Claude…", #selector(startLogin))) }
@@ -405,6 +419,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true); alert.runModal()
     }
     @objc func openUsageSettings() { NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!) }
+    @objc func openCodexUsageSettings() { NSWorkspace.shared.open(URL(string: "https://chatgpt.com/codex/settings/usage")!) }
     @objc func quit() { NSApp.terminate(nil) }
     func ensureServer() {
         URLSession.shared.dataTask(with: URL(string: baseURL + "/api/ping")!) { data, _, _ in

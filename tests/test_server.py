@@ -1,11 +1,14 @@
 """Offline API, registry and cache contracts; no sockets or real credentials."""
 import io
+import builtins
 import json
 import os
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
+from datetime import datetime, timezone
 from email.message import Message
 from pathlib import Path
 from unittest.mock import patch
@@ -24,7 +27,8 @@ HEADERS = {
     "anthropic-ratelimit-unified-7d-status": "allowed_warning",
 }
 PUBLIC_KEYS = {"id", "label", "email", "plan", "source", "machine_login",
-               "five_hour", "seven_day", "limits", "state", "fetched_at", "expires_at"}
+               "five_hour", "seven_day", "limits", "state", "fetched_at", "expires_at",
+               "provider", "as_of", "quota_source"}
 
 
 class Response(io.BytesIO):
@@ -41,15 +45,21 @@ class ServerTests(unittest.TestCase):
         self.directory = self.home / "accounts"
         self.directory.mkdir()
         self.envfile = self.home / "env"
+        self.codex_env = self.home / "codex-env"
         self.enter(patch.dict(os.environ, {
             "CLAUDE_USAGE_ACCOUNTS_DIR": str(self.directory),
             "CLAUDE_USAGE_BRIDGE_ENV": str(self.envfile),
             "CLAUDE_USAGE_PROBE_SECONDS": "600",
             "CLAUDE_USAGE_PROBE_MODEL": "claude-haiku-4-5-20251001",
+            "CLAUDE_USAGE_CODEX_ENV": str(self.codex_env),
+            "CLAUDE_USAGE_CODEX_BIN": str(self.home / "missing-codex"),
+            "CLAUDE_USAGE_CODEX_SECONDS": "300",
         }))
         self.enter(patch.object(Path, "home", return_value=self.home))
         self.keychain = self.enter(patch.object(server, "keychain_read", side_effect=server.SignedOut()))
         self.subprocess = self.enter(patch.object(server.subprocess, "run", side_effect=AssertionError("real subprocess forbidden")))
+        self.real_popen = subprocess.Popen
+        self.popen = self.enter(patch.object(server.subprocess, "Popen", side_effect=AssertionError("real codex forbidden")))
         self.urlopen = self.enter(patch.object(server.urllib.request, "urlopen", side_effect=AssertionError("unmocked network forbidden")))
         self.clock = self.enter(patch.object(server.time, "time", return_value=10000.0))
         server._account_states.clear()
@@ -95,6 +105,41 @@ class ServerTests(unittest.TestCase):
 
     def probe_response(self, headers=None):
         self.urlopen.side_effect = lambda *a, **k: Response(headers=headers)
+
+    def codex(self, label="pro"):
+        home = self.home / ("codex-" + label)
+        home.mkdir(exist_ok=True)
+        self.codex_env.write_text("CODEX_BRIDGE_ACCOUNTS=" + label + ":" + str(home) + "\n")
+        return next(a for a in server.account_registry() if a["id"] == "codex-" + label)
+
+    def codex_live(self, email="pro@example.com", plan="prolite", edu=False):
+        primary = {"usedPercent": 1 if edu else 12, "windowDurationMins": 300 if edu else 10080,
+                   "resetsAt": 1792479781 if edu else 1792883421}
+        secondary = {"usedPercent": 0, "windowDurationMins": 10080, "resetsAt": 1793066581} if edu else None
+        limits = {"limitId": "codex", "primary": primary, "secondary": secondary,
+                  "credits": {"secret": "fixture-credits"}}
+        return ({"account": {"type": "chatgpt", "email": email, "planType": plan},
+                 "workspaceRouting": {"secret": "fixture-routing"}},
+                {"rateLimits": limits, "rateLimitsByLimitId": {"codex": limits},
+                 "accountId": "fixture-account-id", "rateLimitResetCredits": {"fixture-reset-id": 1},
+                 "rateLimitUpsell": "fixture-upsell"})
+
+    def rollout(self, account, as_of=9900, used=34, reset=20000, name="rollout-fixture.jsonl"):
+        path = Path(account["_home"]) / "sessions/2026/10/20" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        event = {"timestamp": datetime.fromtimestamp(as_of, timezone.utc).isoformat().replace("+00:00", "Z"),
+                 "type": "event_msg", "payload": {"type": "token_count", "rate_limits": {
+                     "limit_id": "codex", "primary": {"used_percent": used, "window_minutes": 300,
+                                                       "resets_at": reset},
+                     "secondary": {"used_percent": 8, "window_minutes": 10080, "resets_at": 20000}}}}
+        path.write_text(json.dumps(event) + "\n")
+        return path
+
+    def fake_codex(self, body):
+        path = self.home / "fake-app-server"
+        path.write_text("#!/usr/bin/env python3\n" + body)
+        path.chmod(0o700)
+        return patch.dict(os.environ, {"CLAUDE_USAGE_CODEX_BIN": str(path)})
 
     def test_registry_order_from_bridge_env_then_alphabetical(self):
         for label in ("zebra", "mahidol", "kkpk", "pho", "apple"):
@@ -394,6 +439,399 @@ class ServerTests(unittest.TestCase):
         self.clock.return_value += 61
         self.request("POST", "/api/refresh?account=pho", headers)
         self.assertEqual(self.urlopen.call_count, 2)
+
+    def test_codex_registry_order_quotes_homes_and_public_fields(self):
+        self.token("pho")
+        self.codex_env.write_text(
+            '# logins\nexport CODEX_BRIDGE_ACCOUNTS="pro:~/.codex,edu:~/edu,pro:/ignored,sk-ant-bad:/bad"\n'
+            'CODEX_BRIDGE_MANUAL_ACCOUNTS=edu\n')
+        accounts = server.account_registry()
+        self.assertEqual([a["id"] for a in accounts], ["pho", "codex-pro", "codex-edu"])
+        self.assertEqual(accounts[0]["provider"], "claude")
+        self.assertEqual(accounts[1], {"id": "codex-pro", "label": "pro", "provider": "codex",
+                                      "source": "codex", "machine_login": False, "expires_at": None,
+                                      "email": None, "plan": None, "_home": str(self.home / ".codex")})
+        self.assertEqual(accounts[2]["_home"], str(self.home / "edu"))
+        self.codex_env.write_text("CODEX_BRIDGE_ACCOUNTS='edu:~,pro:/fixture/pro'\n")
+        self.assertEqual([a["_home"] for a in server.codex_registry()], [str(self.home), "/fixture/pro"])
+
+    def test_codex_registry_fallback_only_for_existing_default_home(self):
+        self.assertEqual(server.codex_registry(), [])
+        (self.home / ".codex").mkdir()
+        self.assertEqual(server.codex_registry()[0]["id"], "codex-codex")
+        self.codex_env.write_text("CODEX_BRIDGE_MANUAL_ACCOUNTS=edu\n")
+        self.assertEqual(server.codex_registry()[0]["_home"], str(self.home / ".codex"))
+        self.codex_env.write_text("CODEX_BRIDGE_ACCOUNTS=\n")
+        self.assertEqual(server.codex_registry(), [])
+
+    def test_codex_env_default_uses_patched_home_and_override_is_literal(self):
+        default = self.home / ".config/codex-bridge/env"
+        default.parent.mkdir(parents=True)
+        default.write_text("CODEX_BRIDGE_ACCOUNTS=edu:~/edu\n")
+        with patch.dict(os.environ):
+            os.environ.pop("CLAUDE_USAGE_CODEX_ENV", None)
+            self.assertEqual(server.codex_registry()[0]["id"], "codex-edu")
+        with patch.dict(os.environ, {"CLAUDE_USAGE_CODEX_ENV": "~/codex-env"}):
+            with patch.object(Path, "read_text", side_effect=FileNotFoundError) as read:
+                self.assertEqual(server.codex_registry(), [])
+                self.assertEqual(read.call_count, 1)
+
+    def test_codex_weekly_only_live_maps_public_schema(self):
+        account = self.codex()
+        with patch.object(server, "codex_app_server_read", return_value=self.codex_live()) as read:
+            result = server.fetch_registered_account(account)
+        read.assert_called_once_with(account["_home"])
+        self.assertEqual(set(result), PUBLIC_KEYS)
+        self.assertIsNone(result["five_hour"])
+        self.assertIsNone(result["limits"])
+        self.assertEqual(result["seven_day"], {"utilization": 12.0, "resets_at": "2026-10-24T23:10:21Z",
+                                                "status": "allowed"})
+        self.assertEqual((result["email"], result["plan"], result["provider"], result["as_of"],
+                          result["quota_source"], result["state"]),
+                         ("pro@example.com", "pro lite", "codex", 10000, "live", "ok"))
+
+    def test_codex_edu_maps_windows_by_duration_and_identity_is_cached(self):
+        account = self.codex("edu")
+        with patch.object(server, "codex_app_server_read", return_value=self.codex_live("edu@example.com", "edu", True)) as read:
+            result = server.fetch_registered_account(account)
+            self.clock.return_value += 299
+            cached = server.fetch_registered_account(server.account_registry()[0])
+        self.assertEqual(read.call_count, 1)
+        self.assertEqual(cached, result)
+        self.assertEqual(result["five_hour"]["utilization"], 1)
+        self.assertEqual(result["seven_day"]["utilization"], 0)
+        self.assertEqual(result["plan"], "edu")
+        self.assertEqual(server.account_state(account)["identity"], ("codex", account["_home"]))
+
+    def test_codex_plan_map(self):
+        for raw, expected in (("prolite", "pro lite"), ("promax", "pro max"), ("edu_plus", "edu plus"),
+                              ("edu_pro", "edu pro"), ("edu", "edu"), ("future_plan", "future plan"),
+                              ("unknown", None), (None, None), ("sk-ant-fixture", None)):
+            with self.subTest(plan=raw):
+                self.assertEqual(server.codex_plan(raw), expected)
+
+    def test_claude_public_freshness_and_quota_sources(self):
+        account = self.token()
+        self.probe_response()
+        result = server.fetch_registered_account(account)
+        self.assertEqual((result["provider"], result["quota_source"], result["as_of"]),
+                         ("claude", "probe", result["fetched_at"]))
+        account.update(source="keychain", _credential="fixture-login")
+        with patch.object(server, "official_usage", return_value={"five_hour": {"utilization": 20}, "seven_day": None}):
+            result = server.fetch_registered_account(account)
+        self.assertEqual((result["provider"], result["quota_source"], result["as_of"]),
+                         ("claude", "official", result["fetched_at"]))
+
+    def test_codex_limit_selection_validation_and_missing_windows(self):
+        _, result = self.codex_live()
+        result["rateLimits"] = {"limitId": "premium", "primary": {"usedPercent": 88, "windowDurationMins": 300}}
+        self.assertEqual(server.codex_live_snapshot(result)["seven_day"]["utilization"], 12)
+        result.pop("rateLimitsByLimitId")
+        self.assertIsNone(server.codex_live_snapshot(result)["five_hour"])
+        result["rateLimits"]["limitId"] = None
+        self.assertEqual(server.codex_live_snapshot(result)["five_hour"]["utilization"], 88)
+        for value in (True, -1, 101, "nan", "inf", "bad"):
+            with self.subTest(value=value):
+                self.assertIsNone(server.codex_windows({"primary": {"usedPercent": value, "windowDurationMins": 300}})["five_hour"])
+        data = server.codex_windows({"primary": {"usedPercent": 100, "windowDurationMins": 10080, "resetsAt": "bad"},
+                                     "secondary": {"usedPercent": 10, "windowDurationMins": 60}})
+        self.assertIsNone(data["five_hour"])
+        self.assertEqual(data["seven_day"], {"utilization": 100, "resets_at": None, "status": "rejected"})
+
+    def test_codex_ttl_and_guarded_refresh_route(self):
+        account = self.codex()
+        headers = {"Host": "localhost:8737", "X-Widget": "1"}
+        with patch.object(server, "codex_app_server_read", return_value=self.codex_live()) as read:
+            server.fetch_registered_account(account)
+            self.clock.return_value += 59
+            server.fetch_registered_account(account)
+            self.request("POST", "/api/refresh?account=codex-pro", headers)
+            self.assertEqual(read.call_count, 1)
+            self.clock.return_value += 1
+            code, body = self.request("POST", "/api/refresh?account=codex-pro", headers)
+            self.assertEqual(code, 200)
+            self.assertEqual(json.loads(body)["quota_source"], "live")
+            self.assertEqual(read.call_count, 2)
+            self.clock.return_value += 299
+            server.fetch_registered_account(account)
+            self.assertEqual(read.call_count, 2)
+            self.clock.return_value += 1
+            server.fetch_registered_account(account)
+            self.assertEqual(read.call_count, 3)
+
+    def test_codex_interval_minimum_and_invalid_configuration(self):
+        account = self.codex()
+        with patch.dict(os.environ, {"CLAUDE_USAGE_CODEX_SECONDS": "1"}):
+            self.assertEqual(server.codex_seconds(), 60)
+            with patch.object(server, "codex_app_server_read", return_value=self.codex_live()) as read:
+                server.fetch_registered_account(account)
+                self.clock.return_value += 59
+                server.fetch_registered_account(account)
+                self.assertEqual(read.call_count, 1)
+                self.clock.return_value += 1
+                server.fetch_registered_account(account)
+                self.assertEqual(read.call_count, 2)
+        with patch.dict(os.environ, {"CLAUDE_USAGE_CODEX_SECONDS": "bad"}):
+            self.assertEqual(server.codex_seconds(), 300)
+
+    def test_codex_signed_out_clears_live_and_never_serves_rollout(self):
+        account = self.codex()
+        with patch.object(server, "codex_app_server_read", return_value=self.codex_live()) as read:
+            server.fetch_registered_account(account)
+            self.rollout(account, as_of=10301)
+            self.clock.return_value += 300
+            read.side_effect = server.SignedOut()
+            result = server.fetch_registered_account(account)
+            self.assertEqual(result["state"], "token_rejected")
+            self.assertIsNone(result["five_hour"])
+            self.assertIsNone(result["seven_day"])
+            self.assertIsNone(result["as_of"])
+            self.clock.return_value += 299
+            self.assertEqual(server.fetch_registered_account(account, force=True)["state"], "token_rejected")
+            self.assertEqual(read.call_count, 2)
+
+    def test_codex_live_failure_uses_rollout_timestamp_and_expires_windows(self):
+        account = self.codex()
+        self.rollout(account, as_of=9900.25, reset=9999)
+        with patch.object(server, "codex_app_server_read", side_effect=OSError("offline")) as read:
+            result = server.fetch_registered_account(account)
+            self.assertEqual(result["state"], "stale")
+            self.assertEqual(result["quota_source"], "rollout")
+            self.assertEqual(result["as_of"], 9900.25)
+            self.assertEqual(result["five_hour"], {"utilization": 0, "resets_at": None, "status": "allowed"})
+            self.assertEqual(result["seven_day"]["utilization"], 8)
+            self.clock.return_value += 299
+            server.fetch_registered_account(account, force=True)
+            self.assertEqual(read.call_count, 1)
+            self.clock.return_value += 1
+            server.fetch_registered_account(account)
+            self.assertEqual(read.call_count, 2)
+
+    def test_codex_newer_rollout_overlays_live_on_every_fetch(self):
+        account = self.codex()
+        with patch.object(server, "codex_app_server_read", return_value=self.codex_live()) as read:
+            self.assertEqual(server.fetch_registered_account(account)["quota_source"], "live")
+            self.clock.return_value += 20
+            self.rollout(account, as_of=10010)
+            result = server.fetch_registered_account(account)
+            self.assertEqual(result["state"], "ok")
+            self.assertEqual(result["quota_source"], "rollout")
+            self.assertEqual(result["as_of"], 10010)
+            self.assertEqual(result["five_hour"]["utilization"], 34)
+            self.assertEqual(result["email"], "pro@example.com")
+            self.assertEqual(read.call_count, 1)
+
+    def test_codex_older_rollout_does_not_replace_live_but_covers_failure(self):
+        account = self.codex()
+        self.rollout(account)
+        with patch.object(server, "codex_app_server_read", return_value=self.codex_live()) as read:
+            self.assertEqual(server.fetch_registered_account(account)["quota_source"], "live")
+            self.clock.return_value += 300
+            read.side_effect = OSError("offline")
+            result = server.fetch_registered_account(account)
+            self.assertEqual((result["quota_source"], result["state"]), ("rollout", "stale"))
+
+    def test_codex_no_rollout_retains_old_snapshot_or_reports_error(self):
+        account = self.codex()
+        with patch.object(server, "codex_app_server_read", side_effect=OSError("offline")) as read:
+            self.assertEqual(server.fetch_registered_account(account)["state"], "error")
+            self.clock.return_value += 299
+            server.fetch_registered_account(account, force=True)
+            self.assertEqual(read.call_count, 1)
+            self.clock.return_value += 1
+            read.side_effect = None
+            read.return_value = self.codex_live()
+            good = server.fetch_registered_account(account)
+            self.clock.return_value += 300
+            read.side_effect = OSError("offline")
+            stale = server.fetch_registered_account(account)
+            self.assertEqual(stale["state"], "stale")
+            self.assertEqual(stale["as_of"], good["as_of"])
+            self.assertEqual(stale["seven_day"], good["seven_day"])
+
+    def test_codex_rollout_cache_uses_path_mtime_size_and_whole_tree(self):
+        account = self.codex()
+        first = self.rollout(account)
+        second = self.rollout(account, as_of=9950, used=56, name="rollout-other.jsonl")
+        os.utime(first, (200, 200)); os.utime(second, (100, 100))
+        original_open = Path.open
+        reads = []
+        def tracked(path, *args, **kwargs):
+            if path.name.startswith("rollout-"):
+                reads.append(path)
+            return original_open(path, *args, **kwargs)
+        with patch.object(Path, "open", tracked), patch.object(server, "codex_app_server_read", side_effect=OSError):
+            self.assertEqual(server.fetch_registered_account(account)["five_hour"]["utilization"], 34)
+            server.fetch_registered_account(account)
+            self.assertEqual(reads, [first])
+            os.utime(second, (300, 300))
+            self.assertEqual(server.fetch_registered_account(account)["five_hour"]["utilization"], 56)
+            self.assertEqual(reads, [first, second])
+            with original_open(second, "a") as file:
+                file.write("broken\n")
+            server.fetch_registered_account(account)
+            self.assertEqual(reads, [first, second, second])
+
+    def test_codex_rollout_tail_ignores_partial_invalid_and_other_limits(self):
+        account = self.codex()
+        path = self.rollout(account)
+        event = path.read_text()
+        other = json.loads(event)
+        other["payload"]["rate_limits"]["limit_id"] = "premium"
+        path.write_text("x" * (256 * 1024) + "\n" + event + "{broken\n" + json.dumps(other) + "\n")
+        with patch.object(server, "codex_app_server_read", side_effect=OSError):
+            self.assertEqual(server.fetch_registered_account(account)["five_hour"]["utilization"], 34)
+
+    def test_codex_rollout_expiry_is_recomputed_without_rereading_file(self):
+        account = self.codex()
+        self.rollout(account, reset=10010)
+        with patch.object(server, "codex_app_server_read", side_effect=OSError):
+            self.assertEqual(server.fetch_registered_account(account)["five_hour"]["utilization"], 34)
+            self.clock.return_value += 11
+            result = server.fetch_registered_account(account)
+            self.assertEqual(result["five_hour"]["utilization"], 0)
+            self.assertIsNone(result["five_hour"]["resets_at"])
+
+    def test_codex_email_change_drops_snapshot_before_mapping_new_usage(self):
+        account = self.codex()
+        with patch.object(server, "codex_app_server_read", return_value=self.codex_live()) as read:
+            server.fetch_registered_account(account)
+            self.clock.return_value += 300
+            read.return_value = self.codex_live("changed@example.com", "edu")
+            with patch.object(server, "codex_live_snapshot", side_effect=ValueError("bad usage")):
+                result = server.fetch_registered_account(account)
+            self.assertEqual(result["state"], "error")
+            self.assertIsNone(result["seven_day"])
+            self.assertEqual(result["email"], "changed@example.com")
+            self.assertIsNone(server.account_state(account)["snapshot"])
+
+    def test_codex_home_change_drops_identity_snapshot(self):
+        account = self.codex()
+        with patch.object(server, "codex_app_server_read", return_value=self.codex_live()) as read:
+            server.fetch_registered_account(account)
+            account["_home"] = str(self.home / "replacement-home")
+            read.side_effect = OSError("offline")
+            result = server.fetch_registered_account(account)
+            self.assertEqual(result["state"], "error")
+            self.assertIsNone(result["email"])
+            self.assertIsNone(result["seven_day"])
+
+    def test_codex_auth_file_is_never_opened_and_private_fields_never_escape(self):
+        account = self.codex()
+        (Path(account["_home"]) / "auth.json").write_text("fixture-secret-token")
+        original_open, original_path_open = builtins.open, Path.open
+        original_text, original_bytes = Path.read_text, Path.read_bytes
+        blocked = []
+        def guard(path):
+            if not isinstance(path, int) and Path(path).name == "auth.json":
+                blocked.append(str(path))
+                raise AssertionError("credential file opened")
+        def guarded_open(path, *args, **kwargs):
+            guard(path)
+            return original_open(path, *args, **kwargs)
+        def guarded_path_open(path, *args, **kwargs):
+            guard(path)
+            return original_path_open(path, *args, **kwargs)
+        def guarded_text(path, *args, **kwargs):
+            guard(path)
+            return original_text(path, *args, **kwargs)
+        def guarded_bytes(path, *args, **kwargs):
+            guard(path)
+            return original_bytes(path, *args, **kwargs)
+        with patch("builtins.open", guarded_open), patch.object(Path, "open", guarded_path_open), \
+                patch.object(Path, "read_text", guarded_text), patch.object(Path, "read_bytes", guarded_bytes), \
+                patch.object(server, "codex_app_server_read", return_value=self.codex_live()):
+            self.assertEqual(server.account_registry()[0]["id"], "codex-pro")
+            code, body = self.request("GET", "/api/accounts")
+        self.assertEqual(code, 200)
+        self.assertEqual(blocked, [])
+        self.assertEqual(set(json.loads(body)["accounts"][0]), PUBLIC_KEYS)
+        for secret in (b"fixture-secret-token", b"fixture-account-id", b"fixture-reset-id", b"fixture-credits",
+                       b"fixture-routing", b"fixture-upsell", b"_home", b"auth.json"):
+            self.assertNotIn(secret, body)
+
+    def test_codex_real_subprocess_fake_protocol_and_environment(self):
+        body = '''import json, os, sys
+assert sys.argv[1:] == ["app-server"]
+assert "OPENAI_API_KEY" not in os.environ and "CODEX_API_KEY" not in os.environ
+def receive():
+    return json.loads(sys.stdin.readline())
+def send(value):
+    print(json.dumps(value), flush=True)
+initialize = receive()
+assert initialize == {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+    "clientInfo": {"name": "claude-usage-widget", "version": "2.1"}}}
+send({"method": "configWarning", "params": {}})
+send({"id": 1, "result": {}})
+assert receive() == {"jsonrpc": "2.0", "method": "initialized"}
+assert receive() == {"jsonrpc": "2.0", "id": 2, "method": "account/read", "params": {}}
+assert receive() == {"jsonrpc": "2.0", "id": 3, "method": "account/rateLimits/read"}
+# Multiple lines in one write catch buffered-read/select deadlocks.
+sys.stdout.write(json.dumps({"id": 3, "result": {"home": os.environ["CODEX_HOME"], "path": os.environ["PATH"]}}) + "\\n" +
+                 json.dumps({"method": "account/updated", "params": {}}) + "\\n" +
+                 json.dumps({"id": 2, "result": {"account": {"email": "fake@example.com"}}}) + "\\n")
+sys.stdout.flush()
+sys.stdin.read()
+'''
+        home = self.home / "fixture-home"
+        with self.fake_codex(body), patch.dict(os.environ, {"OPENAI_API_KEY": "fixture-key", "CODEX_API_KEY": "fixture-key"}), \
+                patch.object(server.subprocess, "Popen", side_effect=self.real_popen) as launch:
+            account, limits = server.codex_app_server_read(home, timeout=2)
+            self.assertEqual(os.environ["OPENAI_API_KEY"], "fixture-key")
+            self.assertEqual(os.environ["CODEX_API_KEY"], "fixture-key")
+        self.assertEqual(account["account"]["email"], "fake@example.com")
+        self.assertEqual(limits["home"], str(home))
+        self.assertTrue(limits["path"].startswith(os.pathsep.join([
+            str(self.home), str(self.home / ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"])))
+        self.assertTrue(launch.call_args.kwargs["start_new_session"])
+        self.assertEqual(launch.call_args.kwargs["stderr"], subprocess.DEVNULL)
+
+    def test_codex_real_subprocess_timeout_reaps_child_with_frozen_wall_clock(self):
+        children = []
+        def launch(*args, **kwargs):
+            process = self.real_popen(*args, **kwargs)
+            children.append(process)
+            return process
+        with self.fake_codex('import time\ntime.sleep(30)\n'), patch.object(server.subprocess, "Popen", side_effect=launch):
+            start = time.monotonic()
+            with self.assertRaises(TimeoutError):
+                server.codex_app_server_read(self.home, timeout=2)
+            self.assertLess(time.monotonic() - start, 5)
+        self.assertEqual(len(children), 1)
+        self.assertIsNotNone(children[0].poll())
+        self.assertTrue(children[0].stdin.closed)
+        self.assertTrue(children[0].stdout.closed)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(children[0].pid, 0)
+
+    def test_codex_real_subprocess_signed_out_rpc_error_and_malformed_json(self):
+        responses = (({"id": 2, "result": {"account": None}}, server.SignedOut),
+                     ({"id": 2, "error": {"code": -1}}, server.SignedOut),
+                     ({"id": 3, "error": {"code": -1}}, RuntimeError),
+                     ("malformed", ValueError))
+        for response, exception in responses:
+            with self.subTest(response=response):
+                body = ('import sys\nsys.stdin.readline()\nprint(\'{"id":1,"result":{}}\', flush=True)\n'
+                        'for _ in range(3): sys.stdin.readline()\n'
+                        'print(' + repr(response if isinstance(response, str) else json.dumps(response)) + ', flush=True)\n')
+                with self.fake_codex(body), patch.object(server.subprocess, "Popen", side_effect=self.real_popen):
+                    with self.assertRaises(exception):
+                        server.codex_app_server_read(self.home, timeout=2)
+
+    def test_codex_binary_search_precedence_and_missing_binary(self):
+        local = self.home / ".local/bin/codex"
+        local.parent.mkdir(parents=True)
+        local.write_text("#!/bin/sh\nexit 1\n")
+        local.chmod(0o700)
+        with patch.dict(os.environ):
+            os.environ.pop("CLAUDE_USAGE_CODEX_BIN", None)
+            with self.assertRaisesRegex(AssertionError, "real codex forbidden"):
+                server.codex_app_server_read(self.home)
+            self.assertEqual(self.popen.call_args.args[0], [str(local), "app-server"])
+            with patch.object(os, "access", return_value=False), patch.object(server.shutil, "which", return_value=None) as which:
+                with self.assertRaises(FileNotFoundError):
+                    server.codex_app_server_read(self.home)
+                self.assertIn("/opt/homebrew/bin", which.call_args.kwargs["path"])
 
     def test_legacy_usage_fetch_shape_cache_and_signed_out_unchanged(self):
         self.assertEqual(server.fetch_usage()["logged_in"], False)

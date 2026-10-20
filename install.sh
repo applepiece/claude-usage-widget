@@ -1,5 +1,5 @@
 #!/bin/bash
-# Claude Usage Widget — installer
+# Claude Usage Widget · installer
 # Builds the native app from source and installs it to /Applications.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -48,7 +48,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>Claude Usage</string>
   <key>CFBundleExecutable</key><string>ClaudeUsage</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>2.0</string>
+  <key>CFBundleShortVersionString</key><string>2.1</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
