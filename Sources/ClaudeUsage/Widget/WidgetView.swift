@@ -9,6 +9,7 @@ final class WidgetView: NSView {
     var seven: (pct: Double, when: String)?
     var offline = true
     var signedOut = false
+    var reduceMotion = false
     var t: CGFloat = 0            // animation clock (seconds)
     var danceUntil: CGFloat = -1  // celebrate until this clock value
     var nightOverride: Bool?      // preview hook
@@ -164,9 +165,12 @@ final class WidgetView: NSView {
         let u: CGFloat = 3
         let mood = severity
         let p = pose
+        // Keep the seven-second pose clock running, but freeze every movement
+        // within a pose, including props, blinking, warning jitter and dancing.
+        let t: CGFloat = reduceMotion ? 0 : self.t
         let dancing = (p == .dance)
-        let bobBase = dancing ? CGFloat(Int(t * 4) % 2) * 3 - 1 : (sin(t * (p == .sleep ? 1.0 : 2.0)) * 2).rounded()
-        let jitter = mood == 2 ? (sin(t * 22) * 1).rounded() : 0
+        let bobBase = reduceMotion ? 0 : dancing ? CGFloat(Int(t * 4) % 2) * 3 - 1 : (sin(t * (p == .sleep ? 1.0 : 2.0)) * 2).rounded()
+        let jitter = !reduceMotion && mood == 2 ? (sin(t * 22) * 1).rounded() : 0
         let ox = 4 + jitter
         let oyTop = 70 + bobBase
 

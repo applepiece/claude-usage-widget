@@ -2,273 +2,198 @@ import Cocoa
 import UsageKit
 
 @MainActor
-private func menuLabel(_ text: String, size: CGFloat, weight: NSFont.Weight,
-                       color: NSColor) -> NSTextField {
+func providerAccent(_ provider: Provider) -> NSColor {
+    provider == .codex ? NSColor(red: 0.27, green: 0.31, blue: 0.38, alpha: 1) : clawdSalmon
+}
+
+@MainActor
+func accountAvatar(_ account: UsageAccount?, size: CGFloat) -> NSImage {
+    let image = NSImage(size: NSSize(width: size, height: size))
+    image.lockFocus()
+    let color = account.map { providerAccent($0.provider) } ?? .tertiaryLabelColor
+    color.setFill()
+    NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: size, height: size)).fill()
+    if account?.isCodex == true {
+        let text = NSAttributedString(string: "›_", attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: size / 2, weight: .bold),
+            .foregroundColor: NSColor.white,
+        ])
+        text.draw(at: NSPoint(x: (size - text.size().width) / 2, y: (size - text.size().height) / 2))
+    } else {
+        drawClawdGlyph(in: NSRect(x: size * 0.1875, y: size * 0.28125,
+                                 width: size * 0.625, height: size * 0.4375), color: .white, eyeColor: color)
+    }
+    image.unlockFocus()
+    image.isTemplate = false
+    return image
+}
+
+@MainActor
+private func menuLabel(_ text: String, size: CGFloat, weight: NSFont.Weight = .regular,
+                       color: NSColor = .labelColor) -> NSTextField {
     let label = NSTextField(labelWithString: text)
-    label.font = NSFont.systemFont(ofSize: size, weight: weight)
+    label.font = NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
     label.textColor = color
     label.lineBreakMode = .byTruncatingTail
     label.maximumNumberOfLines = 1
     label.cell?.usesSingleLineMode = true
+    label.setAccessibilityElement(false)
     return label
 }
 
 @MainActor
-private func spacedText(_ text: String, font: NSFont, color: NSColor,
-                        kern: CGFloat) -> NSAttributedString {
-    NSAttributedString(string: text, attributes: [
-        .font: font, .foregroundColor: color, .kern: kern,
-    ])
-}
-
-// The chip draws its own text instead of wrapping an NSTextField: a text field
-// pins its glyphs to the top of its frame, which left MAX riding the upper edge
-// of the pill. Drawing by hand is the only way to centre it on both axes.
-@MainActor
-private final class PlanPillView: NSView {
-    private let text: NSAttributedString
-    private let textWidth: CGFloat
-    private let baselineY: CGFloat
-
-    init(plan: String) {
-        let kern: CGFloat = 0.6
-        let font = NSFont.systemFont(ofSize: 9.5, weight: .bold)
-        text = spacedText(plan.uppercased(), font: font, color: .white, kern: kern)
-        // kerning leaves a trailing gap after the last glyph, so drop it before
-        // centring or the text lands slightly left
-        textWidth = text.size().width - kern
-        // An all-caps plan name has no descender, so centring the font's line
-        // box would leave its empty descender space at the bottom and float the
-        // text toward the top edge. Centre the cap height instead: draw(at:)
-        // takes the bottom of the line box, which sits |descender| below the
-        // baseline, hence the negative term.
-        // A plan name is all caps, so its ink is exactly the cap height: centre
-        // that, not the font's line box, or the box's empty descender space
-        // floats the text toward the top edge. draw(at:) takes the bottom of the
-        // line box, which sits this far below the baseline. Left unrounded so
-        // the result is not quantised away from centre.
-        let lineBottomToBaseline = text.size().height - font.ascender
-        baselineY = (18 - font.capHeight) / 2 - lineBottomToBaseline
-        super.init(frame: NSRect(x: 0, y: 0,
-                                 width: (ceil(textWidth) + 15).rounded(),
-                                 height: 18))
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    override func draw(_ dirtyRect: NSRect) {
-        clawdSalmon.setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 5, yRadius: 5).fill()
-        text.draw(at: NSPoint(x: (bounds.width - textWidth) / 2, y: baselineY))
-    }
-}
-
-@MainActor
-private final class AccountRoleView: NSView {
-    let role: String
-    init(role: String) {
-        self.role = role
-        super.init(frame: NSRect(x: 0, y: 0, width: role == "PRIMARY" ? 53 : 68, height: 13))
-    }
-    required init?(coder: NSCoder) { nil }
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.quaternaryLabelColor.setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 3, yRadius: 3).fill()
-        (role as NSString).draw(at: NSPoint(x: 5, y: 1),
-                                withAttributes: [.font: NSFont.systemFont(ofSize: 8, weight: .bold),
-                                                 .foregroundColor: NSColor.secondaryLabelColor])
-    }
-}
-
-@MainActor
 final class AccountHeaderView: NSView {
-    private let account: AccountInfo
+    private let avatar: NSImage
+    private let plan: String?
+    private let accent: NSColor
+    private let status: String?
+    private let statusColor: NSColor
+    private let statusSymbol: String
 
-    init(account: AccountInfo, role: String? = nil) {
-        self.account = account
-        let offset: CGFloat = role == nil ? 0 : 14
-        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 58 + offset))
-
-        let email = account.email ?? ""
-        let fallbackName = email.split(separator: "@", maxSplits: 1)
-            .first.map(String.init) ?? "Claude user"
-        let knownName = account.name?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = account.loggedIn
-            ? ((knownName?.isEmpty == false ? knownName : nil) ?? fallbackName)
-            : "Not signed in"
-        let provider = account.provider == .codex ? "Codex" : "Claude"
-        let detail = account.loggedIn ? provider + " · " + email : "Sign in to see your usage"
-        let nameLabel = menuLabel(name, size: 13.5, weight: .semibold,
-                                  color: .labelColor)
-        let emailLabel = menuLabel(detail, size: 11.5, weight: .regular,
-                                   color: .secondaryLabelColor)
+    init(account: UsageAccount?, now: Date = Date()) {
+        avatar = accountAvatar(account, size: 32)
+        plan = MenuFormatting.planTitle(account?.plan)
+        accent = account.map { providerAccent($0.provider) } ?? .tertiaryLabelColor
+        switch account?.state {
+        case .stale:
+            status = MenuFormatting.updated(since: account.flatMap(MenuFormatting.timestamp), now: now)
+            statusColor = .systemOrange
+            statusSymbol = "exclamationmark.triangle.fill"
+        case .tokenRejected:
+            status = String(localized: "Sign-in expired · renew in Settings")
+            statusColor = .systemRed
+            statusSymbol = "xmark.octagon.fill"
+        case .error:
+            status = String(localized: "Couldn't load usage")
+            statusColor = .systemOrange
+            statusSymbol = "exclamationmark.triangle.fill"
+        default:
+            status = nil
+            statusColor = .secondaryLabelColor
+            statusSymbol = ""
+        }
+        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: status == nil ? 52 : 68))
+        let extra: CGFloat = status == nil ? 0 : 16
+        let name = account?.label ?? String(localized: "No accounts")
+        let detail = account == nil ? String(localized: "Sign in to Claude Code to see your usage") : account?.email ?? ""
+        let nameLabel = menuLabel(name, size: 13, weight: .semibold)
+        let tagWidth = plan.map { Self.tagText($0, color: accent).size().width + 12 } ?? 0
+        nameLabel.frame = NSRect(x: 56, y: 28 + extra, width: 230 - (plan == nil ? 0 : tagWidth + 8), height: 17)
         addSubview(nameLabel)
-        addSubview(emailLabel)
-
-        if let role {
-            let chip = AccountRoleView(role: role)
-            chip.frame.origin = NSPoint(x: 58, y: 5)
-            addSubview(chip)
+        let email = menuLabel(detail, size: 11, color: .secondaryLabelColor)
+        email.lineBreakMode = .byTruncatingMiddle
+        email.frame = NSRect(x: 56, y: 12 + extra, width: 230, height: 15)
+        addSubview(email)
+        if let status {
+            let label = menuLabel(status, size: 11, color: statusColor)
+            label.frame = NSRect(x: 30, y: 3, width: 256, height: 15)
+            addSubview(label)
         }
-        var textMaxX: CGFloat = 306
-        if account.loggedIn, let plan = account.plan, !plan.isEmpty {
-            let pill = PlanPillView(plan: plan)
-            // centre the chip on the name line rather than pinning it by its top
-            pill.frame.origin = NSPoint(x: 306 - pill.frame.width,
-                                        y: 29 + offset + (17 - pill.frame.height) / 2)
-            addSubview(pill)
-            textMaxX = pill.frame.minX - 8
-        }
-        nameLabel.frame = NSRect(x: 58, y: 29 + offset, width: textMaxX - 58, height: 17)
-        emailLabel.frame = NSRect(x: 58, y: 13 + offset, width: textMaxX - 58, height: 15)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        let identity = [account?.providerName, plan].compactMap { $0 }.joined(separator: " ")
+        setAccessibilityLabel([name, identity, detail, status].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", "))
+        setAccessibilityChildren([])
     }
 
     required init?(coder: NSCoder) { nil }
+
+    private static func tagText(_ plan: String, color: NSColor) -> NSAttributedString {
+        NSAttributedString(string: plan, attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold), .foregroundColor: color,
+        ])
+    }
 
     override func draw(_ dirtyRect: NSRect) {
-        let isCodex = account.provider == .codex
-        let avatarColor = isCodex ? NSColor(red: 0.27, green: 0.31, blue: 0.38, alpha: 1)
-            : (account.loggedIn ? clawdSalmon : NSColor.tertiaryLabelColor)
-        avatarColor.setFill()
-        let circle = NSRect(x: 14, y: bounds.height - 46, width: 34, height: 34)
-        NSBezierPath(ovalIn: circle).fill()
-        if isCodex {
-            let glyph = "›_" as NSString
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.monospacedSystemFont(ofSize: 16, weight: .bold), .foregroundColor: NSColor.white,
-            ]
-            let size = glyph.size(withAttributes: attributes)
-            glyph.draw(at: NSPoint(x: circle.midX - size.width / 2, y: circle.midY - size.height / 2),
-                       withAttributes: attributes)
-        } else {
-            drawClawdGlyph(in: NSRect(x: 21, y: bounds.height - 36, width: 20, height: 14),
-                           color: .white, eyeColor: avatarColor)
+        let extra: CGFloat = status == nil ? 0 : 16
+        avatar.draw(in: NSRect(x: 14, y: 10 + extra, width: 32, height: 32))
+        if let plan {
+            let text = Self.tagText(plan, color: accent)
+            let width = ceil(text.size().width) + 12
+            let rect = NSRect(x: 286 - width, y: 29 + extra, width: width, height: 16)
+            accent.withAlphaComponent(0.14).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
+            text.draw(at: NSPoint(x: rect.minX + 6, y: rect.midY - text.size().height / 2))
         }
-
-        // inset hairline: identity above, usage below. Drawn in the view rather
-        // than as a menu separator so the preview renderer shows it too. Signed
-        // out there is no usage section under it, so it would dangle.
-        guard account.loggedIn else { return }
-        NSColor.separatorColor.setFill()
-        NSRect(x: 14, y: 0, width: 292, height: 1).fill()
+        if status != nil, let symbol = NSImage(systemSymbolName: statusSymbol, accessibilityDescription: nil) {
+            let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
+                .applying(NSImage.SymbolConfiguration(paletteColors: [statusColor]))
+            symbol.withSymbolConfiguration(config)?.draw(in: NSRect(x: 14, y: 5, width: 12, height: 12))
+        }
     }
-}
-
-@MainActor
-final class UsageSectionView: NSView {
-    init(freshness: String) {
-        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 22))
-        let font = NSFont.systemFont(ofSize: 10, weight: .semibold)
-        let left = menuLabel("", size: 10, weight: .semibold,
-                             color: .tertiaryLabelColor)
-        left.attributedStringValue = spacedText(
-            "PLAN USAGE LIMITS", font: font, color: .tertiaryLabelColor, kern: 0.6)
-        left.frame = NSRect(x: 14, y: 4, width: 170, height: 14)
-        addSubview(left)
-
-        let right = menuLabel("", size: 10, weight: .semibold,
-                              color: .tertiaryLabelColor)
-        right.attributedStringValue = spacedText(
-            freshness, font: font, color: .tertiaryLabelColor, kern: 0.6)
-        right.sizeToFit()
-        right.frame = NSRect(x: 306 - right.frame.width, y: 4,
-                             width: right.frame.width, height: 14)
-        addSubview(right)
-    }
-
-    required init?(coder: NSCoder) { nil }
 }
 
 @MainActor
 final class UsageLimitRowView: NSView {
     private let limit: LimitInfo
-    private let percent: Double?
+    private let bottomPadding: CGFloat
 
-    init(limit: LimitInfo, now: Date) {
+    init(limit: LimitInfo, now: Date, first: Bool, last: Bool) {
         self.limit = limit
-        self.percent = limit.value
-        super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 58))
-
-        let label = menuLabel(Self.label(for: limit), size: 12.5,
-                              weight: .regular, color: .labelColor)
-        let rightText = percent.map { "\(Int($0.rounded()))% used" } ?? "–"
-        let right = menuLabel(rightText, size: 12, weight: .semibold,
-                              color: (percent ?? 0) >= 90 ? usageRed : .labelColor)
+        bottomPadding = last ? 6 : 0
+        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 44 + (first ? 4 : 0) + bottomPadding))
+        let name = MenuFormatting.limitName(limit)
+        let percent = limit.value.map { String(localized: "\(Int($0.rounded()))%") } ?? String(localized: "–")
+        let right = menuLabel(percent, size: 13, weight: .semibold,
+                              color: (limit.value ?? 0) >= 90 ? .systemRed : .labelColor)
         right.sizeToFit()
-        right.frame = NSRect(x: 306 - right.frame.width, y: 36,
-                             width: right.frame.width, height: 16)
-        label.frame = NSRect(x: 14, y: 36,
-                             width: max(0, right.frame.minX - 22), height: 17)
-        addSubview(label)
+        right.frame = NSRect(x: 286 - right.frame.width, y: 28 + bottomPadding, width: right.frame.width, height: 16)
         addSubview(right)
-        let resetText = percent == nil ? "Window unavailable" : Self.resetText(limit.resetsAt, now: now)
-        let reset = menuLabel(resetText + (limit.status == "rejected" ? " · rejected" : ""),
-                              size: 10.5, weight: .regular, color: .secondaryLabelColor)
-        reset.frame = NSRect(x: 14, y: 4, width: 292, height: 15)
-        addSubview(reset)
+        let left = menuLabel(name, size: 13)
+        left.frame = NSRect(x: 14, y: 28 + bottomPadding, width: right.frame.minX - 22, height: 16)
+        addSubview(left)
+        let caption = MenuFormatting.resetCaption(value: limit.value, reset: limit.resetsAt.flatMap(parseISO), now: now)
+        let text = NSMutableAttributedString(string: caption, attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        let suffix = limit.status == "rejected" ? String(localized: " · Limit reached") : ""
+        if !suffix.isEmpty {
+            text.append(NSAttributedString(string: suffix, attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
+                .foregroundColor: NSColor.systemRed,
+            ]))
+        }
+        let label = menuLabel("", size: 11)
+        label.attributedStringValue = text
+        label.frame = NSRect(x: 14, y: bottomPadding, width: 272, height: 15)
+        addSubview(label)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.levelIndicator)
+        setAccessibilityLabel(name)
+        setAccessibilityValue(percent)
+        setAccessibilityHelp(caption + suffix)
+        setAccessibilityChildren([])
     }
 
     required init?(coder: NSCoder) { nil }
 
-    private static func label(for limit: LimitInfo) -> String {
-        switch limit.kind ?? "" {
-        case "session":
-            return "5-hour limit"
-        case "weekly_all":
-            return "Weekly · all models"
-        case "weekly_scoped":
-            if let name = limit.scope?.model?.displayName, !name.isEmpty {
-                return "Weekly · " + name
-            }
-            return "Weekly · scoped"
-        case let kind where !kind.isEmpty:
-            return kind.replacingOccurrences(of: "_", with: " ").capitalized
-        default:
-            return "Usage limit"
-        }
-    }
-
-    private static func resetText(_ value: String?, now: Date) -> String {
-        guard let value, let date = parseISO(value) else { return "Ready · no active window" }
-        return "Resets at " + UsageFormatting.resetDate.string(from: date)
-    }
-
     override func draw(_ dirtyRect: NSRect) {
-        let track = NSRect(x: 14, y: 25, width: 292, height: 5)
+        let track = NSRect(x: 14, y: 17 + bottomPadding, width: 272, height: 5)
         NSColor.quaternaryLabelColor.setFill()
-        NSBezierPath(roundedRect: track, xRadius: 3, yRadius: 3).fill()
-
-        guard let percent else { return }
-        let clamped = min(100, max(0, percent))
-        guard clamped > 0 else { return }
-        let width = min(track.width, max(6, track.width * CGFloat(clamped) / 100))
-        let color: NSColor
-        if percent >= 90 {
-            color = usageRed
-        } else if limit.group == "session" {
-            color = usageOrange
-        } else {
-            color = usagePurple
-        }
+        NSBezierPath(roundedRect: track, xRadius: 2.5, yRadius: 2.5).fill()
+        guard let value = limit.value, value > 0 else { return }
+        let color = value >= 90 ? usageRed : (limit.kind == "session" ? usageOrange : usagePurple)
         color.setFill()
-        NSBezierPath(roundedRect: NSRect(x: track.minX, y: track.minY,
-                                        width: width, height: track.height),
-                     xRadius: 3, yRadius: 3).fill()
+        let fill = NSRect(x: track.minX, y: track.minY, width: max(5, track.width * value / 100), height: 5)
+        NSBezierPath(roundedRect: fill, xRadius: 2.5, yRadius: 2.5).fill()
     }
 }
 
 @MainActor
 enum UsageMenuViews {
-    static func items(account: AccountInfo, usage: Usage?, role: String? = nil,
-                      state: String = "ok", now: Date = Date()) -> [NSMenuItem] {
-        var items = [item(with: AccountHeaderView(account: account, role: role))]
-        guard account.loggedIn else { return items }
-
-        let fetched = usage?.fetchedAt.map { Date(timeIntervalSince1970: $0) } ?? now
-        items.append(item(with: UsageSectionView(
-            freshness: state == "ok" ? freshnessText(since: fetched, now: now) : state.replacingOccurrences(of: "_", with: " ").uppercased())))
-        for limit in limits(from: usage) {
-            items.append(item(with: UsageLimitRowView(limit: limit, now: now)))
+    static func items(account: UsageAccount?, now: Date = Date()) -> [NSMenuItem] {
+        var items = [item(with: AccountHeaderView(account: account, now: now))]
+        guard let account, !account.failed else { return items }
+        let limits: [LimitInfo]
+        if let reported = account.limits, !reported.isEmpty { limits = reported }
+        else {
+            limits = [("session", account.fiveHour), ("weekly_all", account.sevenDay)].map { kind, limit in
+                LimitInfo(resetsAt: limit?.resetsAt, kind: kind, percent: limit?.value, status: limit?.status)
+            }
+        }
+        for (index, limit) in limits.enumerated() {
+            items.append(item(with: UsageLimitRowView(limit: limit, now: now, first: index == 0, last: index == limits.count - 1)))
         }
         return items
     }
@@ -279,25 +204,4 @@ enum UsageMenuViews {
         item.isEnabled = false
         return item
     }
-
-    private static func freshnessText(since date: Date, now: Date) -> String {
-        let age = max(0, now.timeIntervalSince(date))
-        if age < 60 { return "Updated just now" }
-        if age < 60 * 60 { return "Updated \(Int(age / 60))m ago" }
-        if age < 24 * 60 * 60 { return "Updated \(Int(age / (60 * 60)))h ago" }
-        return "Updated \(Int(age / (24 * 60 * 60)))d ago"
-    }
-
-    private static func limits(from usage: Usage?) -> [LimitInfo] {
-        if let limits = usage?.limits, !limits.isEmpty { return limits }
-        var limits: [LimitInfo] = []
-        limits.append(LimitInfo(resetsAt: usage?.fiveHour?.resetsAt,
-                                kind: "session", group: "session", percent: usage?.fiveHour?.value,
-                                status: usage?.fiveHour?.status))
-        limits.append(LimitInfo(resetsAt: usage?.sevenDay?.resetsAt,
-                                kind: "weekly_all", group: "weekly", percent: usage?.sevenDay?.value,
-                                status: usage?.sevenDay?.status))
-        return limits
-    }
 }
-

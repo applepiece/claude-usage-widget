@@ -9,22 +9,29 @@
 /* Begin PBXBuildFile section */
 		04D1F629618986FA5FB87DC8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5D62445A8778F77FBDC27E57 /* Assets.xcassets */; };
 		165F1843CA8EE09E49A395B7 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C85A65CB464FEA7FFDE6699E /* main.swift */; };
+		251D7280BD69564D2175D666 /* SettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 949539042E5F6672BDC73FC7 /* SettingsWindowController.swift */; };
 		2F2D36739B7CC7BF621276DC /* UsageClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F56F127D422F4924321117B /* UsageClient.swift */; };
 		30D3681AE5D3E5A837E97836 /* widget.html in Resources */ = {isa = PBXBuildFile; fileRef = 572F610E080623F5236E8F67 /* widget.html */; };
+		3DB2B5C43773A444BB58BBFC /* SettingsViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C9CB4B84DD3F86744E788B /* SettingsViews.swift */; };
 		737613FCC4311B4EF27D455E /* server.py in Resources */ = {isa = PBXBuildFile; fileRef = 63F8B26D2D469192E2E269E5 /* server.py */; };
 		74B385779036141411AFA327 /* Previews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50CB40203B8291975879162F /* Previews.swift */; };
+		784B8672CDA0A745EAF52846 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = C63EB339CA9F5CC55618D025 /* Localizable.xcstrings */; };
 		7C4C256A64E072A243C1F898 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 1EB106C9DD27462C43E28F78 /* PrivacyInfo.xcprivacy */; };
 		817344AE0CF85A6CFE5B659F /* Fonts in Resources */ = {isa = PBXBuildFile; fileRef = 733CC73C8A3B244A4883D138 /* Fonts */; };
 		853A3F13B112DCCC254BC4EC /* WidgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D19E56FE97FBFC1F363FC0F /* WidgetView.swift */; };
 		878A653E879377AABF3E8E1C /* MenuBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C0D75EAE6AC5342EA0B330A /* MenuBuilder.swift */; };
+		907BB9DE86F279B163D30847 /* qa-review.sh in Resources */ = {isa = PBXBuildFile; fileRef = FB9B1D160229EEFA046481AD /* qa-review.sh */; };
 		923CA50D8BF7F8B3710B9CC4 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41107AA3F4AFD2FA0CBF8CDB /* AppDelegate.swift */; };
+		B053D0BF31961D178773F48D /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 087014AFDB5A84BE0F7B614F /* AppModel.swift */; };
 		BA5C619C6FA5569306640742 /* UsageKit in Frameworks */ = {isa = PBXBuildFile; productRef = C878BF095DC356B053113DF1 /* UsageKit */; };
 		BBC779A9B3C277DEB976102F /* MenuViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC9579623E51DF0CCB7BE7AA /* MenuViews.swift */; };
 		CDE2DFC0FE965F66FC311D22 /* ServerProcess.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB58183BCB7DD2BEBC1026D1 /* ServerProcess.swift */; };
 		DEAFEE097396EB1A3B3270CD /* PixelFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = 974F60BFEACD20F43A663B08 /* PixelFont.swift */; };
+		E4F9D203D90834B062426536 /* QAOptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0807688D9DA70E273C5A7D /* QAOptions.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		087014AFDB5A84BE0F7B614F /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		1EB106C9DD27462C43E28F78 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		2C0D75EAE6AC5342EA0B330A /* MenuBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBuilder.swift; sourceTree = "<group>"; };
 		41107AA3F4AFD2FA0CBF8CDB /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -35,13 +42,18 @@
 		5D62445A8778F77FBDC27E57 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		63F8B26D2D469192E2E269E5 /* server.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = server.py; sourceTree = "<group>"; };
 		6D19E56FE97FBFC1F363FC0F /* WidgetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetView.swift; sourceTree = "<group>"; };
+		71C9CB4B84DD3F86744E788B /* SettingsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViews.swift; sourceTree = "<group>"; };
 		733CC73C8A3B244A4883D138 /* Fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Fonts; path = Resources/Fonts; sourceTree = SOURCE_ROOT; };
 		8F7470ECC2AAF79E6A0C5652 /* Claude Usage.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Claude Usage.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		949539042E5F6672BDC73FC7 /* SettingsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindowController.swift; sourceTree = "<group>"; };
 		974F60BFEACD20F43A663B08 /* PixelFont.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PixelFont.swift; sourceTree = "<group>"; };
+		9A0807688D9DA70E273C5A7D /* QAOptions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QAOptions.swift; sourceTree = "<group>"; };
 		AB58183BCB7DD2BEBC1026D1 /* ServerProcess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerProcess.swift; sourceTree = "<group>"; };
+		C63EB339CA9F5CC55618D025 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		C85A65CB464FEA7FFDE6699E /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		CAB79B95244FFB1313809788 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>"; };
 		CC9579623E51DF0CCB7BE7AA /* MenuViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuViews.swift; sourceTree = "<group>"; };
+		FB9B1D160229EEFA046481AD /* qa-review.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "qa-review.sh"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -68,10 +80,12 @@
 		34443FCE744189F1F721EED9 /* ClaudeUsage */ = {
 			isa = PBXGroup;
 			children = (
+				C63EB339CA9F5CC55618D025 /* Localizable.xcstrings */,
 				96B6EF520895592B174E4F21 /* App */,
 				358DCB8D52BFC7DD736F0919 /* Debug */,
 				BC1B8C5A128B85DE0B31801D /* Menu */,
 				DB47C8CCBA6397FF3FAA7D59 /* Services */,
+				B0E33D84B243A15E0A07EB1E /* Settings */,
 				2C3D1CC6CFC515C4823E2AB2 /* Widget */,
 			);
 			name = ClaudeUsage;
@@ -82,6 +96,8 @@
 			isa = PBXGroup;
 			children = (
 				50CB40203B8291975879162F /* Previews.swift */,
+				FB9B1D160229EEFA046481AD /* qa-review.sh */,
+				9A0807688D9DA70E273C5A7D /* QAOptions.swift */,
 			);
 			path = Debug;
 			sourceTree = "<group>";
@@ -115,6 +131,7 @@
 			isa = PBXGroup;
 			children = (
 				41107AA3F4AFD2FA0CBF8CDB /* AppDelegate.swift */,
+				087014AFDB5A84BE0F7B614F /* AppModel.swift */,
 				C85A65CB464FEA7FFDE6699E /* main.swift */,
 			);
 			path = App;
@@ -132,6 +149,15 @@
 				56C2DC2923F2DCC59E72BD9F /* Resources */,
 				DE040C3B31A66879A643C28A /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		B0E33D84B243A15E0A07EB1E /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				71C9CB4B84DD3F86744E788B /* SettingsViews.swift */,
+				949539042E5F6672BDC73FC7 /* SettingsWindowController.swift */,
+			);
+			path = Settings;
 			sourceTree = "<group>";
 		};
 		BC1B8C5A128B85DE0B31801D /* Menu */ = {
@@ -227,7 +253,9 @@
 			files = (
 				04D1F629618986FA5FB87DC8 /* Assets.xcassets in Resources */,
 				817344AE0CF85A6CFE5B659F /* Fonts in Resources */,
+				784B8672CDA0A745EAF52846 /* Localizable.xcstrings in Resources */,
 				7C4C256A64E072A243C1F898 /* PrivacyInfo.xcprivacy in Resources */,
+				907BB9DE86F279B163D30847 /* qa-review.sh in Resources */,
 				737613FCC4311B4EF27D455E /* server.py in Resources */,
 				30D3681AE5D3E5A837E97836 /* widget.html in Resources */,
 			);
@@ -241,11 +269,15 @@
 			buildActionMask = 2147483647;
 			files = (
 				923CA50D8BF7F8B3710B9CC4 /* AppDelegate.swift in Sources */,
+				B053D0BF31961D178773F48D /* AppModel.swift in Sources */,
 				878A653E879377AABF3E8E1C /* MenuBuilder.swift in Sources */,
 				BBC779A9B3C277DEB976102F /* MenuViews.swift in Sources */,
 				DEAFEE097396EB1A3B3270CD /* PixelFont.swift in Sources */,
 				74B385779036141411AFA327 /* Previews.swift in Sources */,
+				E4F9D203D90834B062426536 /* QAOptions.swift in Sources */,
 				CDE2DFC0FE965F66FC311D22 /* ServerProcess.swift in Sources */,
+				3DB2B5C43773A444BB58BBFC /* SettingsViews.swift in Sources */,
+				251D7280BD69564D2175D666 /* SettingsWindowController.swift in Sources */,
 				2F2D36739B7CC7BF621276DC /* UsageClient.swift in Sources */,
 				853A3F13B112DCCC254BC4EC /* WidgetView.swift in Sources */,
 				165F1843CA8EE09E49A395B7 /* main.swift in Sources */,

@@ -1,17 +1,127 @@
-# Claude Usage Widget 2.1 🦀
+# Claude Usage 3.0 🦀
 
-A tiny native macOS floating widget and menu-bar app for Claude subscription
-usage, with Claw'd as an animated pixel-art companion. AppKit only, macOS 13+.
-Orange shows 5-hour usage; purple shows weekly usage. Each bar shows percent
-**used** and its reset time. Drag the widget to move it; click Claw'd's legs to
-minimize it. Right-click the widget or status item for the account menu.
+A native macOS menu bar app and floating desktop widget for Claude and Codex
+subscription usage. Orange shows 5-hour usage; purple shows weekly usage.
+Each bar shows percent **used** and its reset time. Version 3.0 is build 300.
 
-![Claw'd idle](docs/pose-idle.png)
+![Claw'd idle widget pose](docs/pose-idle.png)
 
 Claw'd cycles through reading, coding, music, photography and cooking, sleeps
 22:00–07:00, worries at 70%, panics at 90%, and dances when a limit resets.
-Position, minimized state and display preferences survive relaunches.
-The app registers itself under System Settings → Login Items.
+Drag the widget to move it; click Claw'd's legs to minimize it. Position,
+minimized state, account selections and display preferences survive relaunches.
+Launch at login is opt-in in Settings.
+
+## Prerequisites
+
+1. **For Developer ID releases or App Store delivery, join the paid Apple
+   Developer Program (USD 99 per year) first.** The current team `FP62793T7J`
+   is a free Personal Team (`isFreeProvisioningTeam = 1`). Its installed
+   `Apple Development: developer@example.com (M6W8MTA32Y)` identity cannot sign a
+   Developer ID release or deliver to the App Store. `M6W8MTA32Y` is the member
+   ID, not the team ID. Paid membership is not required for local source builds.
+2. **macOS 14 or later.** The current app starts bundled `server.py` with
+   `/usr/bin/python3`, so that interpreter must work. It is a Command Line Tools
+   shim on stock macOS; install the tools if needed. The server uses Python 3.9+
+   and the standard library, with no pip packages.
+3. **To build:** Xcode 27, its selected developer directory and accepted license,
+   plus XcodeGen 2.46 or later. Command Line Tools alone cannot build this project.
+   For example, install XcodeGen with `brew install xcodegen`.
+4. Sign in to [Claude Code](https://claude.com/claude-code), configure bridge
+   accounts, or configure Codex accounts as described below. A signed-out app
+   still opens and exposes account setup. Live Codex quotas need the Codex CLI.
+
+## Install and build
+
+Install from source:
+
+```bash
+git clone https://github.com/applepiece/claude-usage-widget.git
+cd claude-usage-widget
+./install.sh
+```
+
+The installer builds once, installs `/Applications/Claude Usage.app`, and opens
+it. It does not need to copy the Python server into Application Support.
+Enable launch at login yourself in **Settings > General**.
+Uninstall with `./uninstall.sh`; account files and old Application Support data
+are retained.
+
+Build without installing or launching:
+
+```bash
+scripts/build-app.sh
+scripts/build-app.sh --debug
+scripts/build-app.sh --sign adhoc
+scripts/build-app.sh --sign none
+```
+
+Output: `dist/Claude Usage.app`. The default is Release with `--sign auto`,
+which uses the project's signing settings. The current project uses manual
+Apple Development signing for team `FP62793T7J`. Use `adhoc` for a local build
+without a signing identity, or `none` to disable signing for development checks.
+Neither makes a public Developer ID release. Previous app outputs are kept
+under `.build/previous-app.*` instead of merging old resources.
+
+Run builds outside the agent sandbox. Do not run concurrent builds or release
+commands in this checkout: they share the generated project and `.build/xcode`.
+
+## Menu and Settings
+
+Open the menu from the menu bar status item. The top card shows the primary
+account's avatar, label, plan tag and email. Each limit gets a percent, a thin
+bar and a reset time such as **Resets in 3h 41m** or **Resets Fri 09:59**.
+
+Below the card is a checkmarked list of all accounts, grouped by provider.
+Click an account to make it primary. Hold **Option** while clicking to make it
+secondary. The remaining actions are **Show Widget on Desktop**, **Refresh
+(⌘R)**, **Settings… (⌘,)** and **Quit**.
+
+Settings has four tabs:
+
+| Tab | Controls |
+| --- | --- |
+| General | Launch at login, off until enabled by the user; desktop widget options. |
+| Menu Bar | Live preview; Percent, Battery, HP Bar, Dual Bars, or Ring; accounts shown; value; Show Numbers; Keep Icon in Menu Bar. |
+| Accounts | Primary and secondary accounts; status and renewal commands; this Mac's Claude Code sign in, switch account and sign out; provider usage page links. |
+| About | Version and credits. |
+
+The primary account initially uses this Mac's login, otherwise the first
+available account. Secondary starts at None and cannot equal primary. Choosing
+the current secondary as primary swaps them. The widget can show Primary only
+or Primary + Secondary. A second account adds tagged bars. Claw'd's mood follows
+primary usage; reset celebrations and offline state are tracked per account.
+
+Menu bar accounts can be **Primary only** (default), **Primary + Secondary**, or
+**All Accounts**. Tags expand to two letters when initials collide. Styles:
+
+| Style | Display |
+| --- | --- |
+| Percent | Text showing percent used. |
+| Battery | Default; fill shows capacity left. |
+| HP Bar | Ten pixel segments showing capacity left, rounded up. |
+| Dual Bars | 5-hour above weekly; fill shows percent used. |
+| Ring | Outer 5-hour and inner weekly rings; fill shows percent used. |
+
+**Value** can be 5-Hour, Weekly, Both, or Most Used (default: the higher available
+percentage). Dual Bars and Ring always show both windows. **Show Numbers** is
+on by default. Numbers mean percent **used**, including on Battery and HP Bar.
+Green means below 70%, amber 70–89%, and red 90%+. Missing data shows **–**;
+errors show **!** without fill.
+
+Spacing shrinks and numbers drop as needed to keep the status image below
+160 points. Percent first drops % signs, then shows each account's highest
+window. Percent with Show Numbers off gives an icon-only status item.
+**Keep Icon in Menu Bar** is on by default; turn it off to show the status item
+only while the widget is minimized.
+
+**Refresh** requests all accounts with guarded `POST /api/refresh?account=<id>`.
+Snapshots younger than 60 seconds and failure backoffs prevent repeated probes.
+Settings account actions affect only this Mac's Claude Code login. Sign out
+asks for confirmation. Sign in starts a visible `claude auth login` in Terminal.
+Bridge token files remain unchanged. Old `barMode` preferences migrate once:
+Off becomes Percent with numbers hidden; 5-Hour/Weekly/Both becomes the
+corresponding value selection.
 
 ## Multiple accounts
 
@@ -19,8 +129,8 @@ The local Python server combines two sources:
 
 - **This Mac's Claude Code login**, from the Keychain item
   `Claude Code-credentials`. Its identity comes from the OAuth profile endpoint,
-  with `~/.claude.json` as a local fallback. Usage comes from the official
-  `/api/oauth/usage` endpoint. The server refreshes expired OAuth credentials and
+  with `~/.claude.json` as a local fallback. Usage comes from the `/api/oauth/usage`
+  endpoint. The server refreshes expired OAuth credentials and
   saves rotated credentials back to the Keychain.
 - **Bridge accounts**, from `~/.config/claude-bridge/accounts/<label>.token`
   (one long-lived `claude setup-token` token per file, mode 600), with a matching
@@ -31,7 +141,7 @@ The local Python server combines two sources:
   the preferred order, not additional token sources.
 
 Matching organization UUIDs merge the Keychain login with its bridge account.
-The merged account keeps its label and uses the official endpoint, falling back
+The merged account keeps its label and uses the OAuth usage endpoint, falling back
 to a bridge probe if it fails. An unmatched login appears as **This Mac**;
 a signed-out Keychain adds no account. Token files and sidecars are never edited.
 
@@ -69,7 +179,7 @@ labels keep the first entry. If the file or variable is missing, an existing
 
 Live quotas come from `codex app-server`, using `account/read` for identity and
 `account/rateLimits/read` for usage. This costs no credits, takes about 2 seconds,
-and runs at most every 5 minutes per login by default. Refresh Now can request a
+and runs at most every 5 minutes per login by default. Refresh can request a
 new read after 60 seconds. The CLI runs with that login's `CODEX_HOME`, an
 extended PATH for Node, and without API key environment overrides. Weekly-only
 plans leave the 5-hour window unavailable.
@@ -81,8 +191,8 @@ Freshness uses the rollout event's timestamp. Expired rollout windows show 0%
 with no reset time. A signed-out login clears usage and shows **token rejected**.
 
 Codex tags start with **›**, such as **›P** and **›E**. Claude tags are computed
-separately, so **pho** stays **P** beside Codex **pro**. Menus show provider names,
-separate settings links, and the renewal hint `bridge-accounts/login-all.sh codex`.
+separately, so **pho** stays **P** beside Codex **pro**. Settings shows provider-specific usage links
+and the renewal hint `bridge-accounts/login-all.sh codex`.
 
 | Variable | Default |
 | --- | --- |
@@ -90,115 +200,182 @@ separate settings links, and the renewal hint `bridge-accounts/login-all.sh code
 | `CLAUDE_USAGE_CODEX_BIN` | First executable in `~/.local/bin/codex`, `/opt/homebrew/bin/codex`, `/usr/local/bin/codex`, then extended PATH |
 | `CLAUDE_USAGE_CODEX_SECONDS` | `300` (minimum `60`; invalid values use `300`) |
 
-### Account menu and display options
+## Local API, privacy and credentials
 
-The primary account's full section comes first, marked **PRIMARY**, followed by
-the secondary account when selected. Rows show the limit label, percent used,
-a thin bar, and reset time. Other accounts stay collapsed into one compact line;
-open one for its full rows, **Make Primary** and **Make Secondary**.
+The app starts `/usr/bin/python3` with
+`Claude Usage.app/Contents/Resources/server.py`. The bundle also contains
+`widget.html`. `~/Library/Application Support/claude-usage-widget` is no longer
+the server source; old files there are kept for manual review.
 
-- **Primary Account**: radio list of labels and emails. Initially this Mac's
-  login, otherwise the first account. **Secondary Account**: None (default), or
-  any account except the primary. Choosing the secondary as primary swaps them.
-- **Menu Bar → Accounts**: Primary only (default), Primary + Secondary, or
-  All Accounts. Multiple gauges get short label tags, expanded to two letters
-  when first letters collide.
-- **Menu Bar → Style**: Percent (text), Battery (default; capacity left),
-  HP Bar (ten pixel segments of capacity left, rounded up), Dual Bars (5-hour
-  above weekly, fill shows used), or Ring (outer 5-hour, inner weekly, used).
-- **Menu Bar → Metric**: 5-Hour, Weekly, Both, or Most Used (default; the higher
-  available percentage). Dual Bars and Ring always show both windows.
-- **Show Numbers**: on by default. Numbers describe percent **used** even when
-  a battery/HP fill shows capacity **left**. Green means below 70% used, amber
-  70–89%, red 90%+. Missing windows show **–**; errors show **!** without fill.
-  Spacing shrinks and numbers drop as needed to keep the status image below
-  160 points. Percent never drops its numbers for width: it first drops the %
-  signs, then shows each account's highest window. Percent with Show Numbers
-  off gives an icon-only status item.
-- **Always Show in Menu Bar**: on by default; turn it off for the old behavior
-  where the status item appears only while minimized. Left-click shows the
-  widget; right-click or Control-click opens the menu.
-- **Widget**: Primary only (default), or Primary + Secondary. The panel grows
-  for the second pair of tagged bars. Claw'd's mood follows primary usage;
-  reset celebrations and offline state are tracked separately per account.
-- **Minimize to Menu Bar / Show Widget**, **Refresh Now**, **Usage Settings…**,
-  **Quit Claude Usage**. Refresh Now requests every account via guarded
-  `POST /api/refresh?account=<id>`; snapshots younger than 60 seconds and failure
-  backoffs are protected from repeated probes.
-- **This Mac's Login → Switch Account… / Sign Out** affect only the Keychain
-  login. Sign Out asks for confirmation. When signed out, this submenu offers
-  **Sign In to Claude…** and starts a visible Claude Code login in Terminal.
+The server binds only to **127.0.0.1:8737**, checks Host on GETs, and requires
+**X-Widget: 1** and an absent Origin for POSTs. The app checks `/api/ping` for
+the server version. A mismatched older server can be asked to quit through the
+guarded `/api/quit`; the app waits for shutdown before starting its bundled
+server. An unresponsive or rejecting listener is left in place.
 
-Old `barMode` preferences migrate once: Off becomes Percent with numbers hidden;
-5-Hour/Weekly/Both becomes the corresponding Metric.
-
-## Install
-
-Requires **macOS 13+** and **Xcode Command Line Tools**
-(`xcode-select --install`). Set up bridge token accounts and/or sign in to
-[Claude Code](https://claude.com/claude-code).
-
-```bash
-git clone https://github.com/applepiece/claude-usage-widget.git
-cd claude-usage-widget
-./install.sh
-```
-
-Uninstall with `./uninstall.sh`.
-
-## Local API and security
-
-The app starts `/usr/bin/python3 server.py` from
-`~/Library/Application Support/claude-usage-widget`. The server binds only to
-**127.0.0.1:8737**, checks Host on GETs, and requires the existing **X-Widget: 1**
-and absent Origin guard for POSTs. Claude tokens are read only inside the server
-and sent only to Anthropic for authentication; they are never logged or returned to
-the UI. Bridge tokens remain in their existing protected files. The registry API
-returns selected identity fields and parsed usage values, without credentials,
+Claude credentials are read inside the server and sent only to Anthropic for
+provider authentication and requests. They are never logged or returned to the
+UI. Keychain OAuth refresh can rotate and save this Mac's credentials. Bridge
+tokens stay in their protected files and are never edited. Codex login handling
+is delegated to its CLI; the server does not read `auth.json`. The registry API
+returns selected identity fields and parsed usage, without credentials,
 fingerprints, organization headers or arbitrary upstream headers.
 
-`/api/accounts` returns all accounts and states. The legacy `/api/usage`,
-`/api/account`, `/api/login`, `/api/logout`, `/api/ping` and HTML page routes retain
-their existing behavior. The app uses the single-account API only when an older
-server returns 404 for `/api/accounts`.
+The app has no developer analytics or telemetry. Provider requests still leave
+the Mac, and probes consume subscription usage. Local identity data includes
+account labels and email addresses. Protect token files and keep credentials
+out of screenshots, logs, bug reports and source control.
+
+`/api/accounts` returns all accounts and states. Legacy `/api/usage`,
+`/api/account`, `/api/login`, `/api/logout`, `/api/ping` and HTML routes remain
+available. The 3.0 native app uses the account registry API.
+
+## Developer ID release
+
+After completing the membership prerequisite, create and install a **Developer
+ID Application** certificate with its private key for team `FP62793T7J`.
+Use [developer.apple.com > Certificates](https://developer.apple.com/account/resources/certificates/list)
+or **Xcode > Settings > Accounts**. An Apple Development identity is insufficient.
+Confirm that `security find-identity -v -p codesigning` lists the Developer ID
+identity with `(FP62793T7J)`.
+
+Set up a notarytool keychain profile once. Replace `<email>` with your Apple ID:
+
+```bash
+xcrun notarytool store-credentials claude-usage-notary --apple-id <email> --team-id FP62793T7J
+```
+
+Enter an app-specific password at the interactive prompt. Never put a password
+on the command line or in the repository. The default profile is
+`claude-usage-notary`. Override it with `NOTARY_PROFILE` or `--notary-profile`.
+The command-line option takes precedence.
+
+Release with one command:
+
+```bash
+scripts/release.sh
+```
+
+The script first checks the Developer ID identity, then the notary profile.
+A missing identity exits **2** with the three setup steps. An unusable notary
+profile exits **3** with the one-time credentials command. These checks run
+before project generation, archive, export, or output-directory creation.
+
+The pipeline generates the Xcode project, archives Release with Developer ID,
+exports and verifies the app's signature and hardened runtime, notarizes a ZIP
+of the app, and staples the app. It creates a compressed DMG containing the
+app and an Applications link, signs and notarizes the DMG, staples it, checks
+Gatekeeper for both products, and writes a SHA-256 checksum. Version numbers
+come from the exported app's Info.plist.
+
+Outputs for version 3.0:
+
+- `dist/Claude-Usage-3.0.dmg`
+- `dist/Claude-Usage-3.0.dmg.sha256`
+- `.build/release/export/Claude Usage.app`
+- Archive, logs, notarization responses, retained staging and previous artifacts
+  under `.build/release/`.
+
+Verify a downloaded checksum from the directory containing both files:
+
+```bash
+shasum -a 256 -c Claude-Usage-3.0.dmg.sha256
+```
+
+For local packaging tests:
+
+```bash
+scripts/make-dmg.sh 'dist/Claude Usage.app' 'dist/Claude-Usage-local.dmg'
+scripts/release.sh --skip-notarize
+```
+
+`make-dmg.sh` only packages an existing app and refuses an existing output
+filename. It does not sign or notarize anything. `--skip-notarize` still requires
+Developer ID, archives and signs both products, and skips notarization,
+stapling and Gatekeeper assessment. Its DMG is for local testing only.
+A normal release requires network access to Apple. Logs are in `.build/release`;
+if notarization is rejected, inspect the response ID and retrieve its log with
+`xcrun notarytool log <id> --keychain-profile claude-usage-notary`.
+
+## App Store status
+
+The current app cannot ship in the Mac App Store. Its shared Keychain access,
+external Python and CLI processes, and direct home-directory reads need a
+sandbox-ready replacement. Branding and service permissions, a privacy policy,
+and paid distribution accounts also need work. The launch-at-login consent
+change is done in 3.0. See [App Store readiness](docs/APP_STORE.md) for blockers,
+the Swift architecture, prepared export/entitlement files, metadata draft, and
+future archive/upload steps.
+
+## Project layout
+
+```text
+project.yml                         XcodeGen source for ClaudeUsage and its scheme
+ClaudeUsage.xcodeproj/               Generated Xcode project
+Config/Shared.xcconfig               Version 3.0, build 300, macOS 14 target
+Config/Info.plist                    Bundle metadata
+Config/ClaudeUsage.entitlements      Developer ID app entitlements
+Config/ClaudeUsage-AppStore.entitlements  Future sandbox entitlements
+Config/ExportOptions-*.plist         Developer ID and App Store export settings
+Sources/ClaudeUsage/                 AppKit app, menu, Settings, services and widget
+Packages/UsageKit/                   Local Swift 6 package, models and renderers
+Resources/                          Assets, Fonts and PrivacyInfo.xcprivacy
+server.py                           Bundled Python account/usage service
+scripts/build-app.sh                Build to dist without installing
+scripts/release.sh                  Archive, export, notarize, staple and package
+scripts/make-dmg.sh                 Package an existing app only
+tests/                              Python tests and preview checks
+docs/                               Widget poses and App Store readiness
+install.sh / uninstall.sh           Local source install and uninstall
+```
+
+The bundle ID is `com.heng.claude-usage-widget`; the executable is `ClaudeUsage`.
+Fleet deployment lives in `agents/infra/fleet/deploy-usage-widget.sh`. It builds
+once on the sending Mac with `scripts/build-app.sh --sign auto`, transfers the
+app, and checks the installed build plus the running server version. Target
+Macs need no Xcode compilation or license acceptance for deployment. They still
+need a working `/usr/bin/python3` for the current app. `--status` only reads the
+pending file and recent log. The existing `--pending` success-notification path
+is retained.
 
 ## Development and offscreen previews
 
 ```bash
-mkdir -p .build/module-cache
+scripts/build-app.sh --debug --sign none
+swift test --package-path Packages/UsageKit
 export PYTHONPYCACHEPREFIX="$PWD/.build/pycache"
-swiftc -O -module-cache-path .build/module-cache -o .build/ClaudeUsage app/*.swift
 /usr/bin/python3 -m unittest discover -s tests -v
 python3 -m unittest discover -s tests -v
 /usr/bin/python3 -m py_compile server.py
 ```
 
-Run these previews **outside the sandbox**, on a Mac with WindowServer access.
+Run preview commands **outside the sandbox** on a Mac with WindowServer access.
 They render offscreen without showing windows, registering login items or
-contacting the server. Output paths below stay in the ignored build directory.
+contacting the server. Build the app first. Output stays under ignored `.build`:
 
 ```bash
-.build/ClaudeUsage --preview-menu .build/menu.png
-.build/ClaudeUsage --preview-menu .build/menu-dark.png --dark
-.build/ClaudeUsage --preview-menu .build/menu-signed-out.png --signed-out
-.build/ClaudeUsage --preview-statusbar .build/statusbar.png
-.build/ClaudeUsage --preview-statusbar .build/statusbar-dark.png --dark
-.build/ClaudeUsage --preview-widget .build/widget.png
-.build/ClaudeUsage --preview-widget .build/widget-two-dark.png --dark --two
+'dist/Claude Usage.app/Contents/MacOS/ClaudeUsage' --preview-menu .build/menu.png
+'dist/Claude Usage.app/Contents/MacOS/ClaudeUsage' --preview-menu .build/menu-dark.png --dark
+'dist/Claude Usage.app/Contents/MacOS/ClaudeUsage' --preview-menu .build/menu-signed-out.png --signed-out
+'dist/Claude Usage.app/Contents/MacOS/ClaudeUsage' --preview-statusbar .build/statusbar.png
+'dist/Claude Usage.app/Contents/MacOS/ClaudeUsage' --preview-statusbar .build/statusbar-dark.png --dark
+'dist/Claude Usage.app/Contents/MacOS/ClaudeUsage' --preview-widget .build/widget.png
+'dist/Claude Usage.app/Contents/MacOS/ClaudeUsage' --preview-widget .build/widget-two-dark.png --dark --two
 ```
 
 Menu samples: pho 15%/82% (machine login), kkpk 0%/37%, mahidol 4%/no weekly,
 Codex pro no 5-hour/12% weekly, and Codex edu 1%/0%. Menu and two-account widget
-previews select pho and codex-pro. The status grid covers every style × accounts
-mode with all five samples, plus Claude and Codex rejected-account rows.
+previews select pho and codex-pro. The status grid covers every style and
+accounts mode with all five samples, plus rejected Claude and Codex accounts.
 All three preview modes support `--dark`; the widget supports `--two` and the
-menu supports `--signed-out`. Visual QA is separate from compilation. Generate all ten light/dark previews with
-`bash tests/preview_checks.sh` outside the sandbox, then inspect the PNGs in
-`.build/previews/` for clipping, contrast and missing-window states.
+menu supports `--signed-out`. Visual QA is separate from compilation. Run
+`bash tests/preview_checks.sh` outside the sandbox and inspect `.build/previews/`
+for clipping, contrast and missing-window states. The widget pose image above
+is retained because those poses are unchanged; no old menu screenshot is used.
 
 ## สำหรับผู้ใช้ภาษาไทย
 
-เวอร์ชัน 2.1 แสดงการใช้ Claude และ Codex หลายบัญชี ทั้ง login ของ Claude Code ใน Keychain
+เวอร์ชัน 3.0 แสดงการใช้ Claude และ Codex หลายบัญชี ทั้ง login ของ Claude Code ใน Keychain
 และ token จาก `~/.config/claude-bridge/accounts/<label>.token` พร้อมไฟล์ `.json`
 ที่ระบุ email และ `org_uuid` เรียงตาม `CLAUDE_BRIDGE_ACCOUNTS` ในไฟล์ bridge `env`
 ก่อน แล้วตามตัวอักษร หาก org ตรงกันจะรวมเป็นบัญชีเดียว; login ที่ไม่ตรงแสดงเป็น
@@ -211,39 +388,52 @@ This Mac และเมื่อ sign out จะไม่เพิ่มบั�
 สำหรับการตรวจอัตโนมัติ) แอปอ่านข้อมูลทุก 60 วินาที บัญชีที่รวมกับ Keychain ใช้
 usage endpoint ก่อนและ probe เมื่อจำเป็น ไม่มีรายสัปดาห์แสดง **–** ไม่ใช่ 0%
 เมื่อดึงข้อมูลล้มเหลวแสดง stale และพัก 5 นาที; token ถูกปฏิเสธแสดง token rejected
-พร้อมคำแนะนำ `scripts/add-account.sh <label>` ในเมนู
+พร้อมคำแนะนำ `scripts/add-account.sh <label>` ใน Settings > Accounts
 
-คลิกขวาเพื่อดู **PRIMARY** และ **SECONDARY** พร้อมเปอร์เซ็นต์ แถบ และเวลารีเซ็ต
-บัญชีอื่นย่อเหลือบรรทัดเดียว เปิดเมนูย่อยเพื่อดูรายละเอียดหรือเลือก **Make Primary /
-Make Secondary** เลือกบัญชีหลักจาก **Primary Account** (เริ่มที่ login ของเครื่อง)
-และบัญชีรองจาก **Secondary Account** (เริ่มที่ None)
+เมนู 3.0 แสดงการ์ดบัญชีหลักพร้อม avatar ชื่อ แผน email และแต่ละ limit
+มีเปอร์เซ็นต์ แถบบาง และเวลารีเซ็ต เช่น Resets in 3h 41m หรือ Resets Fri 09:59
+รายชื่อบัญชีทั้งหมดแยกตาม provider และมีเครื่องหมายเลือก คลิกเพื่อตั้งบัญชีหลัก
+กด Option ค้างแล้วคลิกเพื่อตั้งบัญชีรอง ตามด้วย **Show Widget on Desktop**,
+**Refresh (⌘R)**, **Settings… (⌘,)** และ **Quit**
 
-- **Menu Bar → Accounts**: Primary only / Primary + Secondary / All Accounts
-- **Style**: Percent / Battery (ค่าเริ่มต้น) / HP Bar / Dual Bars / Ring
-  Battery และ HP แสดงพลังที่เหลือ แต่ตัวเลขแสดงเปอร์เซ็นต์ที่ใช้ไป; Dual และ Ring
-  แสดงการใช้ทั้งรอบ 5 ชั่วโมงและรายสัปดาห์เสมอ
-- **Metric**: 5-Hour / Weekly / Both / Most Used (ค่าเริ่มต้น เลือกค่าสูงสุด)
-- **Show Numbers** เปิดเป็นค่าเริ่มต้น สีเขียวเมื่อใช้ต่ำกว่า 70%, เหลือง 70–89%,
-  แดงตั้งแต่ 90%; ข้อมูลหายเป็น **–**, ข้อผิดพลาดเป็น **!** และไม่มีแถบเติม
-  ซ่อนตัวเลขอัตโนมัติเมื่อพื้นที่ไม่พอ ยกเว้นโหมด Percent ที่ตัดเครื่องหมาย % ก่อน
-  แล้วค่อยแสดงเฉพาะรอบที่ใช้มากสุด โหมด Percent ที่ปิดตัวเลขเหลือไอคอนอย่างเดียว
-- **Always Show in Menu Bar** เปิดเป็นค่าเริ่มต้น ปิดเพื่อให้แสดงเฉพาะตอนย่อ widget
-- **Widget**: Primary only / Primary + Secondary ขยายพื้นที่สำหรับบัญชีรอง
-  มีป้ายชื่อย่อ แถบส้ม 5 ชั่วโมง แถบม่วงรายสัปดาห์ น้อง Claw'd เปลี่ยนท่าตามบัญชีหลัก
-  และติดตาม offline/การรีเซ็ตแยกตามบัญชี
-- **Minimize / Show Widget**, **Refresh Now** (ทุกบัญชี แต่ไม่ probe ซ้ำภายใน
-  60 วินาทีหรือระหว่างพักหลังข้อผิดพลาด), **Usage Settings…**, **Quit**
-- **This Mac's Login → Switch Account… / Sign Out** เปลี่ยนเฉพาะ login ใน Keychain
-  ไม่แก้ token ของบัญชีอื่น; หากยังไม่ login จะมี **Sign In to Claude…**
+Settings แบ่งเป็น 4 แท็บ:
 
-ลากเพื่อย้ายตำแหน่ง คลิกขาน้องเพื่อย่อ คลิกซ้ายไอคอน menu bar เพื่อเรียกกลับ
-คลิกขวาหรือ Control-click เพื่อเปิดเมนู จำการตั้งค่าข้ามการเปิดแอปและเปิดอัตโนมัติ
-ตอน login macOS ติดตั้งด้วย `./install.sh` (ต้องมี Xcode Command Line Tools)
+- **General**: เปิดตอน login macOS เมื่อผู้ใช้เลือกเองเท่านั้น ค่าเริ่มต้นปิด
+  พร้อมตัวเลือก desktop widget และแสดงบัญชีหลักหรือบัญชีหลักพร้อมบัญชีรอง
+- **Menu Bar**: preview สด พร้อม Percent / Battery (ค่าเริ่มต้น) / HP Bar /
+  Dual Bars / Ring เลือก Accounts เป็น Primary only / Primary + Secondary /
+  All Accounts และ Value เป็น 5-Hour / Weekly / Both / Most Used
+  (ค่าเริ่มต้น เลือกค่าสูงสุด) มี Show Numbers และ Keep Icon in Menu Bar
+- **Accounts**: เลือกบัญชีหลักและรอง ดูสถานะ คำสั่งต่ออายุ และลิงก์ usage
+  พร้อม sign in / switch / sign out ของ Claude Code บน Mac นี้
+  sign out ยืนยันก่อนและไม่แก้ token ของบัญชี bridge
+- **About**: ข้อมูลเวอร์ชันและเครดิต
+
+Battery และ HP แสดงพลังที่เหลือ แต่ตัวเลขแสดงเปอร์เซ็นต์ที่ใช้ไป
+Dual Bars และ Ring แสดงทั้งรอบ 5 ชั่วโมงและรายสัปดาห์เสมอ
+Show Numbers เปิดเป็นค่าเริ่มต้น สีเขียวเมื่อใช้ต่ำกว่า 70%, เหลือง 70–89%,
+แดงตั้งแต่ 90%; ข้อมูลหายเป็น **–**, ข้อผิดพลาดเป็น **!** และไม่มีแถบเติม
+ลดระยะห่างและซ่อนตัวเลขเมื่อพื้นที่ไม่พอ โหมด Percent ตัดเครื่องหมาย % ก่อน
+แล้วแสดงรอบที่ใช้มากสุด หากปิดตัวเลขจะเหลือไอคอนอย่างเดียว
+
+Keep Icon in Menu Bar เปิดเป็นค่าเริ่มต้น ปิดเพื่อแสดงเฉพาะเมื่อย่อ widget
+บัญชีรองทำให้ widget ขยายพร้อมป้ายชื่อย่อ แถบส้มคือ 5 ชั่วโมง แถบม่วงคือรายสัปดาห์
+น้อง Claw'd เปลี่ยนท่าตามบัญชีหลัก และติดตาม offline/การรีเซ็ตแยกตามบัญชี
+ลากเพื่อย้ายตำแหน่ง คลิกขาน้องเพื่อย่อ จำการตั้งค่าข้ามการเปิดแอป
+กด Refresh เพื่อขอข้อมูลทุกบัญชี โดยไม่ probe ซ้ำภายใน 60 วินาที
+หรือระหว่างพักหลังข้อผิดพลาด
+
+ต้องมี macOS 14 ขึ้นไป การ build ใช้ Xcode 27 และ XcodeGen
+ติดตั้งจาก source ด้วย `./install.sh` หรือ build อย่างเดียวด้วย `scripts/build-app.sh`
+แอปมี server.py อยู่ใน bundle และต้องใช้ `/usr/bin/python3` ที่ทำงานได้
+การออก DMG ด้วย `scripts/release.sh` ต้องสมัคร Apple Developer Program แบบเสียเงิน
+(USD 99 ต่อปี) มี Developer ID Application certificate และตั้ง notarytool ก่อน
+Personal Team ฟรียังออก release ไม่ได้ ดูขั้นตอนด้านบนและ [สถานะ App Store](docs/APP_STORE.md)
 
 ตรวจภาพด้วย `--preview-menu <png> [--dark] [--signed-out]`,
 `--preview-statusbar <png> [--dark]`, `--preview-widget <png> [--dark] [--two]`
 ตามตัวอย่างด้านบน ต้องรันนอก sandbox บน Mac ที่เข้าถึง WindowServer ได้
-โหมด preview ไม่แสดงหน้าต่างและไม่ติดต่อ server
+โหมด preview ไม่แสดงหน้าต่าง ไม่ลงทะเบียน login item และไม่ติดต่อ server
 
 ### บัญชี Codex
 
@@ -254,7 +444,7 @@ Make Secondary** เลือกบัญชีหลักจาก **Primary A
 
 ข้อมูลสดมาจาก `codex app-server` โดยอ่านตัวตนด้วย `account/read` และโควต้าด้วย
 `account/rateLimits/read` ไม่เสียเครดิต ใช้เวลาประมาณ 2 วินาที และอ่านอัตโนมัติ
-ไม่ถี่กว่า 5 นาทีต่อ login ตามค่าเริ่มต้น กด Refresh Now ได้หลังอ่านครั้งก่อน
+ไม่ถี่กว่า 5 นาทีต่อ login ตามค่าเริ่มต้น กด Refresh ได้หลังอ่านครั้งก่อน
 อย่างน้อย 60 วินาที หากแผนมีเฉพาะรายสัปดาห์ ช่อง 5 ชั่วโมงจะแสดงว่าไม่มีข้อมูล
 
 ทุกครั้งที่ poll จะตรวจ rollout ล่าสุดใน `sessions/**/rollout-*.jsonl` ตาม mtime
@@ -263,7 +453,7 @@ Make Secondary** เลือกบัญชีหลักจาก **Primary A
 รอบที่หมดอายุแล้วจะแสดง 0% และไม่มีเวลารีเซ็ต เมื่อ sign out จะล้างโควต้า
 
 ป้าย Codex มี **›** นำหน้า เช่น **›P**, **›E** และคำนวณแยกจาก Claude
-จึงยังใช้ **P** สำหรับ pho แม้มี pro เมนูระบุ provider และแยกลิงก์ Usage Settings
+จึงยังใช้ **P** สำหรับ pho แม้มี pro Settings แยกลิงก์ usage ตาม provider
 คำแนะนำต่ออายุคือ `bridge-accounts/login-all.sh codex`
 
 ตั้งไฟล์รายการด้วย `CLAUDE_USAGE_CODEX_ENV` (ใช้ path ตามที่กำหนด ไม่ขยาย `~`
@@ -271,10 +461,12 @@ Make Secondary** เลือกบัญชีหลักจาก **Primary A
 `CLAUDE_USAGE_CODEX_SECONDS` ค่าเริ่มต้น 300 วินาที ขั้นต่ำ 60 วินาที
 ค่าที่ไม่ถูกต้องใช้ 300 วินาที โดยไม่ต้องเปิดหรืออ่าน `auth.json`
 
-## Credits & license
+## Credits and license
 
-- Code: [MIT](LICENSE)
-- Font: [Press Start 2P](https://fonts.google.com/specimen/Press+Start+2P)
-  by CodeMan38, [SIL OFL 1.1](app/fonts/OFL.txt)
-- **Claw'd** is Anthropic's Claude Code mascot. This is an unofficial fan-made
-  tool, not affiliated with or endorsed by Anthropic.
+- Code: [MIT](LICENSE).
+- Font: [Press Start 2P](https://fonts.google.com/specimen/Press+Start+2P) by
+  CodeMan38, [SIL OFL 1.1](Resources/Fonts/OFL.txt).
+- Claw'd is Anthropic's Claude Code mascot. This is an unofficial fan-made tool,
+  not affiliated with or endorsed by Anthropic or OpenAI. Claude and Codex are
+  their respective owners' trademarks. The current name and artwork need
+  permission for App Store submission; see [readiness](docs/APP_STORE.md).

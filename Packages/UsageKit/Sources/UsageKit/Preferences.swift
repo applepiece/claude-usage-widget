@@ -40,5 +40,17 @@ public struct Preferences {
         if self.accounts == .all { return accounts }
         return [primary(in: accounts), self.accounts == .primarySecondary ? secondary(in: accounts) : nil].compactMap { $0 }
     }
-}
 
+    public func makePrimary(_ id: String, in accounts: [UsageAccount]) {
+        guard accounts.contains(where: { $0.id == id }) else { return }
+        let old = primary(in: accounts)?.id
+        if secondaryID == id { defaults.set(old ?? "none", forKey: "secondaryAccount") }
+        defaults.set(id, forKey: "primaryAccount")
+    }
+
+    public func setSecondary(_ id: String, in accounts: [UsageAccount]) {
+        guard id != primary(in: accounts)?.id,
+              id == "none" || accounts.contains(where: { $0.id == id }) else { return }
+        defaults.set(id, forKey: "secondaryAccount")
+    }
+}

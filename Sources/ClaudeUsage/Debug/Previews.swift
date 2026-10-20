@@ -121,27 +121,53 @@ func renderPreview(kind: String, path: String, dark: Bool, signedOut: Bool, two:
         defaults.register(defaults: ["primaryAccount": "pho", "secondaryAccount": "codex-pro"])
         let delegate = AppDelegate(preferences: Preferences(defaults))
         delegate.accounts = signedOut ? [] : samples
+        delegate.model.lastUpdate = delegate.accounts.compactMap(MenuFormatting.timestamp).max()
+        delegate.model.widgetVisible = true
         let menu = delegate.buildMenu()
-        let heights = menu.items.map { $0.view?.frame.height ?? ($0.isSeparatorItem ? 10 : 24) }
+        let items = menu.items.filter { !$0.isAlternate }
+        func subtitle(_ item: NSMenuItem) -> String? {
+            if #available(macOS 14.4, *) { return item.subtitle }
+            return item.attributedTitle?.string.split(separator: "\n").dropFirst().first.map(String.init)
+        }
+        let heights: [CGFloat] = items.map {
+            $0.view?.frame.height ?? ($0.isSeparatorItem ? 10 : (subtitle($0) == nil ? 24 : 40))
+        }
         let height = heights.reduce(16, +)
-        canvas = PreviewCanvas(frame: NSRect(x: 0, y: 0, width: 336, height: height))
+        canvas = PreviewCanvas(frame: NSRect(x: 0, y: 0, width: 316, height: height))
         var y = height - 8
-        for (index, item) in menu.items.enumerated() {
+        for (index, item) in items.enumerated() {
             y -= heights[index]
             if let view = item.view {
                 item.view = nil
                 view.frame.origin = NSPoint(x: 8, y: y)
                 canvas.addSubview(view)
             } else if item.isSeparatorItem {
-                let line = NSBox(frame: NSRect(x: 22, y: y + 4, width: 292, height: 1))
+                let line = NSBox(frame: NSRect(x: 22, y: y + 4, width: 272, height: 1))
                 line.boxType = .separator; canvas.addSubview(line)
             } else {
-                let text = (item.state == .on ? "✓ " : "") + item.title + (item.submenu == nil ? "" : "  ▸")
+                // Standard AppKit rows are approximated only in the PNG preview.
+                let title = item.title.split(separator: "\n").first.map(String.init) ?? ""
+                let text = (item.state == .on ? "✓ " : "") + title
                 let label = NSTextField(labelWithString: text)
-                label.font = NSFont.menuFont(ofSize: 13)
-                label.textColor = item.isEnabled ? .labelColor : .secondaryLabelColor
-                label.frame = NSRect(x: 22, y: y + 3, width: 292, height: 20)
+                label.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+                label.textColor = item.isSectionHeader || !item.isEnabled ? .secondaryLabelColor : .labelColor
+                let x: CGFloat = item.image == nil ? 22 : 50
+                label.frame = NSRect(x: x, y: y + heights[index] - 21, width: 294 - x, height: 18)
+                label.lineBreakMode = .byTruncatingTail
                 canvas.addSubview(label)
+                if let image = item.image {
+                    let avatar = NSImageView(frame: NSRect(x: 22, y: y + 10, width: 20, height: 20))
+                    avatar.image = image
+                    canvas.addSubview(avatar)
+                }
+                if let detail = subtitle(item) {
+                    let caption = NSTextField(labelWithString: detail)
+                    caption.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+                    caption.textColor = .secondaryLabelColor
+                    caption.frame = NSRect(x: x, y: y + 3, width: 294 - x, height: 15)
+                    caption.lineBreakMode = .byTruncatingTail
+                    canvas.addSubview(caption)
+                }
             }
         }
     default: return 2

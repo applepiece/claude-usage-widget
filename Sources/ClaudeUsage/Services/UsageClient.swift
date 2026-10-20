@@ -7,6 +7,7 @@ enum AppURLs {
     private static func literal(_ value: StaticString) -> URL {
         URL(string: value.description)!
     }
+    static let sourceCode = literal("https://github.com/applepiece/claude-usage-widget")
     static let server = literal("http://127.0.0.1:8737")
     static let claudeSettings = literal("https://claude.ai/settings/usage")
     static let codexSettings = literal("https://chatgpt.com/codex/settings/usage")

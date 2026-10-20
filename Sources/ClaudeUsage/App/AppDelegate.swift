@@ -1,6 +1,5 @@
-// Claude Usage 3.0 · AppKit only. Credentials stay in the local Python server.
+// Claude Usage 3.0 · AppKit with native SwiftUI Settings. Credentials stay in the local Python server.
 import Cocoa
-import ServiceManagement
 import UsageKit
 
 @MainActor
@@ -11,9 +10,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let secondaryView = WidgetView(frame: .zero)
     var statusItem: NSStatusItem?
     var appearanceObservation: NSKeyValueObservation?
-    var accounts: [UsageAccount] = []
+    let model: AppModel
+    let qa: QAOptions
+    var settingsController: SettingsWindowController?
+    var trackingMenu: NSMenu?
+    var qaReadySent = false
+    var defaultsUpdatePending = false
+    var accounts: [UsageAccount] {
+        get { model.accounts }
+        set { model.accounts = newValue }
+    }
     var failCount = 0
-    var refreshing = false
+    var refreshing: Bool {
+        get { model.refreshing }
+        set { model.refreshing = newValue; updateRefreshMenuItem() }
+    }
     var refreshPending = false
     var switchWatch: Timer?
     var previous: [String: UsageAccount] = [:]
@@ -26,13 +37,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var refreshTimer: Timer?
     var loginDeadline = Date.distantPast
 
-    init(preferences: Preferences = Preferences()) {
+    init(preferences: Preferences = Preferences(), qa: QAOptions = QAOptions()) {
         self.preferences = preferences
+        self.qa = qa
+        self.model = AppModel(preferences: preferences, isQA: qa.enabled)
         super.init()
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        if let bid = Bundle.main.bundleIdentifier,
+        if !qa.enabled, let bid = Bundle.main.bundleIdentifier,
            NSRunningApplication.runningApplications(withBundleIdentifier: bid)
             .contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
             NSApp.terminate(nil); return
@@ -40,7 +53,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         registerPixelFont()
         preferences.migrate()
-        try? SMAppService.mainApp.register()
+        if qa.enabled {
+            if let appearance = qa.appearance {
+                NSApp.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
+            }
+            accounts = qa.accounts()
+            model.refreshing = qa.state == "refreshing"
+        }
+        model.widgetAction = { [weak self] visible in
+            if visible { self?.restoreFromMenuBar() } else { self?.minimizeToMenuBar() }
+        }
+        model.refreshAction = { [weak self] in self?.refreshNow() }
+        model.signInAction = { [weak self] in self?.startLogin() }
+        model.signOutAction = { [weak self] in self?.confirmSignOut() }
+        installApplicationMenu()
+        NotificationCenter.default.addObserver(self, selector: #selector(defaultsChanged),
+                                               name: UserDefaults.didChangeNotification, object: preferences.defaults)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(reduceMotionChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+        reduceMotionChanged()
         let rect = NSRect(x: 0, y: 0, width: 216, height: 74)
         let panel = NSPanel(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
@@ -75,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             startAnimation()
         }
         updateUI()
+        if qa.enabled { scheduleQA(); return }
         Task {
             await serverProcess.ensureServer(client: client)
             refresh()
@@ -82,6 +114,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshTimer = Timer.scheduledTimer(timeInterval: 60, target: self,
                                             selector: #selector(refresh), userInfo: nil, repeats: true)
         refreshTimer?.tolerance = 6
+    }
+
+    @objc func defaultsChanged() {
+        guard !defaultsUpdatePending else { return }
+        defaultsUpdatePending = true
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.defaultsUpdatePending = false
+                self.model.preferencesRevision += 1
+                let visible = !self.preferences.defaults.bool(forKey: "minimized")
+                if visible != self.panel?.isVisible {
+                    if visible { self.panel?.orderFrontRegardless(); self.startAnimation() }
+                    else {
+                        self.panel?.orderOut(nil)
+                        self.animationTimer?.invalidate()
+                        self.animationTimer = nil
+                    }
+                }
+                self.updateUI()
+            }
+        }
+    }
+
+    @objc func reduceMotionChanged() {
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        for widget in [view, secondaryView] {
+            widget.reduceMotion = reduce
+            widget.needsDisplay = true
+        }
     }
 
     @objc func panelMoved() {
@@ -113,21 +175,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         animationTimer?.invalidate()
         animationTimer = nil
         preferences.defaults.set(true, forKey: "minimized")
-        updateStatusItem()
+        updateUI()
     }
     @objc func restoreFromMenuBar() {
         panel?.orderFrontRegardless()
         startAnimation()
         preferences.defaults.set(false, forKey: "minimized")
-        updateStatusItem()
+        updateUI()
     }
     @objc func statusClicked() {
         let event = NSApp.currentEvent
         if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
-            statusItem?.menu = buildMenu()
-            statusItem?.button?.performClick(nil)
-            statusItem?.menu = nil
+            openStatusMenu()
         } else { restoreFromMenuBar() }
+    }
+
+    func openStatusMenu() {
+        statusItem?.menu = buildMenu()
+        statusItem?.button?.performClick(nil)
+        statusItem?.menu = nil
     }
 
     func updateStatusItem() {
@@ -162,6 +228,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func updateUI() {
         guard let panel else { return }
+        model.widgetVisible = panel.isVisible
+        model.lastUpdate = accounts.compactMap(MenuFormatting.timestamp).max()
         let primary = preferences.primary(in: accounts)
         let secondary = preferences.twoWidgets ? preferences.secondary(in: accounts) : nil
         let height: CGFloat = secondary == nil ? 74 : 148
@@ -195,6 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         apply(primary, to: view)
         apply(secondary, to: secondaryView)
         updateStatusItem()
+        updateRefreshMenuItem()
     }
 
     func percentage(_ limit: LimitInfo?) -> String {
@@ -233,6 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if refreshPending { refreshPending = false; refreshNow() }
     }
     @objc func refreshNow() {
+        guard !qa.enabled else { return }
         guard !refreshing else { refreshPending = true; return }
         guard !accounts.isEmpty else { refresh(); return }
         refreshing = true
@@ -245,15 +315,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func refresh() {
+        guard !qa.enabled else { return }
         guard !refreshing else { return }
         refreshing = true
         Task { receive(await client.accounts()) }
     }
 
     @objc func startLogin() {
+        guard !qa.enabled else { return }
         Task {
             guard await client.post("login") else {
-                showAuthError("Could not start Claude sign in.")
+                showAuthError(String(localized: "Could not start Claude sign in."))
                 return
             }
             refresh()
@@ -275,12 +347,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func confirmSignOut() {
-        let email = accounts.first(where: { $0.machineLogin })?.email ?? "the current account"
+        guard !qa.enabled else { return }
+        let email = accounts.first(where: { $0.machineLogin })?.email ?? String(localized: "the current account")
         let alert = NSAlert()
-        alert.messageText = "Sign out of Claude Code?"
-        alert.informativeText = "This signs out \(email). The claude CLI on this Mac will need a fresh login."
+        alert.messageText = String(localized: "Sign out of Claude Code?")
+        alert.informativeText = String(localized: "This signs out \(email). The claude CLI on this Mac will need a fresh login.")
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Sign Out"); alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: String(localized: "Sign Out")); alert.addButton(withTitle: String(localized: "Cancel"))
         alert.buttons[0].hasDestructiveAction = true
         alert.buttons[0].keyEquivalent = ""
         alert.buttons[1].keyEquivalent = "\r"
@@ -289,12 +362,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task {
             if await client.post("logout") { refresh() }
-            else { showAuthError("Could not sign out of Claude Code.") }
+            else { showAuthError(String(localized: "Could not sign out of Claude Code.")) }
         }
     }
     func showAuthError(_ message: String) {
         let alert = NSAlert(); alert.messageText = message
-        alert.informativeText = "Make sure the local usage server and Claude Code are installed."
+        alert.informativeText = String(localized: "Make sure the local usage server and Claude Code are installed.")
         NSApp.activate(ignoringOtherApps: true); alert.runModal()
     }
     @objc func openUsageSettings() { NSWorkspace.shared.open(AppURLs.claudeSettings) }
