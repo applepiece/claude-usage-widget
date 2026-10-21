@@ -16,12 +16,15 @@ enum MenuMetrics {
 
 @MainActor
 func accountAvatar(_ account: UsageAccount?, size: CGFloat) -> NSImage {
-    let image = NSImage(size: NSSize(width: size, height: size))
-    image.lockFocus()
+    // Draw lazily: a lockFocus bitmap would freeze dynamic colors in whatever
+    // appearance is current when the menu is built (the menu bar's, which is
+    // dark over a dark wallpaper while the menu itself is light).
     let color = account.map { providerAccent($0.provider) } ?? .tertiaryLabelColor
+    let isCodex = account?.isCodex == true
+    let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
     color.setFill()
     NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: size, height: size)).fill()
-    if account?.isCodex == true {
+    if isCodex {
         let text = NSAttributedString(string: "›_", attributes: [
             .font: NSFont.monospacedSystemFont(ofSize: size / 2, weight: .bold),
             .foregroundColor: NSColor.white,
@@ -31,7 +34,8 @@ func accountAvatar(_ account: UsageAccount?, size: CGFloat) -> NSImage {
         drawClawdGlyph(in: NSRect(x: size * 0.1875, y: size * 0.28125,
                                  width: size * 0.625, height: size * 0.4375), color: .white, eyeColor: color)
     }
-    image.unlockFocus()
+        return true
+    }
     image.isTemplate = false
     return image
 }
@@ -292,8 +296,8 @@ enum AccountMenuTitle {
     }
 
     private static func providerGlyph(_ provider: Provider) -> NSImage {
-        let image = NSImage(size: NSSize(width: 12, height: 12))
-        image.lockFocus()
+        // Drawn at display time so labelColor follows the menu, not the menu bar.
+        NSImage(size: NSSize(width: 12, height: 12), flipped: false) { _ in
         if provider == .claude {
             drawClawdGlyph(in: NSRect(x: 0, y: 0, width: 12, height: 12), color: .labelColor)
         } else {
@@ -303,22 +307,23 @@ enum AccountMenuTitle {
             ])
             text.draw(at: NSPoint(x: (12 - text.size().width) / 2, y: (12 - text.size().height) / 2))
         }
-        image.unlockFocus()
-        return image
+            return true
+        }
     }
 
     private static func column(_ value: Double?, color: NSColor) -> NSAttributedString {
-        let meter = NSImage(size: NSSize(width: 14, height: 4))
-        meter.lockFocus()
+        let meter = NSImage(size: NSSize(width: 14, height: 4), flipped: false) { _ in
         let track = NSRect(x: 0, y: 0, width: 14, height: 4)
-        NSColor.quaternaryLabelColor.setFill()
+        // A touch stronger than quaternaryLabelColor so the track reads on the menu material.
+        NSColor.labelColor.withAlphaComponent(0.18).setFill()
         NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
         if let value, value > 0 {
             (value >= 90 ? usageRed : color).setFill()
-            NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: max(1, 14 * value / 100), height: 4),
+            NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: max(3, 14 * value / 100), height: 4),
                          xRadius: 2, yRadius: 2).fill()
         }
-        meter.unlockFocus()
+            return true
+        }
         let text = NSMutableAttributedString(attributedString: attachment(meter, y: 3))
         let spaceWidth = (" " as NSString).size(withAttributes: [.font: numberFont]).width
         text.append(NSAttributedString(string: " ", attributes: [.font: numberFont, .kern: 4 - spaceWidth]))
