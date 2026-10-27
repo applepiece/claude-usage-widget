@@ -1,7 +1,7 @@
 import Foundation
 
 /// Pure text and compaction rules shared by the status button and its previews.
-public struct StatusTitle: Sendable {
+public struct StatusTitle: Equatable, Sendable {
     public struct Segment: Equatable, Sendable {
         public let accountID: String
         public let shortName: String

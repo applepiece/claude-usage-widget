@@ -9,7 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let view = WidgetView(frame: .zero)
     let secondaryView = WidgetView(frame: .zero)
     var statusItem: NSStatusItem?
-    var appearanceObservation: NSKeyValueObservation?
+    /// What the status button currently shows; nil once the item is gone.
+    var renderedStatus: StatusItemContent?
     let model: AppModel
     let qa: QAOptions
     var settingsController: SettingsWindowController?
@@ -200,9 +201,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let panel else { return }
         let needed = preferences.always || !panel.isVisible
         if !needed {
-            appearanceObservation = nil
             if let item = statusItem { NSStatusBar.system.removeStatusItem(item) }
             statusItem = nil
+            renderedStatus = nil
             return
         }
         if statusItem == nil {
@@ -210,22 +211,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item.button?.target = self
             item.button?.action = #selector(statusClicked)
             item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            // The glyph is a template image and the title carries no color, so
+            // AppKit re-tints both when the menu bar's appearance changes. Do not
+            // observe effectiveAppearance here: NSStatusItem flips the button's
+            // appearance every time it redraws its replicant snapshot, and a redraw
+            // in that callback schedules the next snapshot, spinning the main thread.
+            item.button?.image = StatusRenderer.glyph()
+            item.button?.imagePosition = .imageLeading
             statusItem = item
-            appearanceObservation = item.button?.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
-                Task { @MainActor [weak self] in self?.updateStatusItem() }
-            }
+            renderedStatus = nil
         }
         guard let button = statusItem?.button else { return }
-        let title = StatusTitle(accounts: preferences.shown(in: accounts),
-                                shortNames: preferences.effectiveShortNames(in: accounts),
-                                metric: preferences.metric, numbers: preferences.numbers)
-        button.image = StatusRenderer.glyph()
-        button.imagePosition = .imageLeading
-        button.attributedTitle = StatusRenderer.attributedTitle(title)
-        button.toolTip = accounts.isEmpty ? "Claude Usage · No accounts" : preferences.shown(in: accounts).map {
-            "\($0.label) · \($0.providerName): 5H \(percentage($0.fiveHour)), WK \(percentage($0.sevenDay)) · \($0.rawState)"
-        }.joined(separator: "\n")
-        button.setAccessibilityLabel(title.accessibilityLabel)
+        let content = StatusItemContent(shown: preferences.shown(in: accounts), anyAccounts: !accounts.isEmpty,
+                                        shortNames: preferences.effectiveShortNames(in: accounts),
+                                        metric: preferences.metric, numbers: preferences.numbers)
+        guard content != renderedStatus else { return }
+        renderedStatus = content
+        button.attributedTitle = StatusRenderer.attributedTitle(content.title)
+        button.toolTip = content.toolTip
+        button.setAccessibilityLabel(content.title.accessibilityLabel)
     }
 
     func updateUI() {
@@ -268,9 +272,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateRefreshMenuItem()
     }
 
-    func percentage(_ limit: LimitInfo?) -> String {
-        limit?.value.map { "\(Int($0.rounded()))%" } ?? "–"
-    }
     func receive(_ fresh: [UsageAccount]?) {
         refreshing = false
         if let fresh {

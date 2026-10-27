@@ -2,7 +2,7 @@
 
 A native macOS menu bar app and floating desktop widget for Claude and Codex
 subscription usage. Orange shows 5-hour usage; purple shows weekly usage.
-Each bar shows percent **used** and its reset time. Version 3.0 is build 300.
+Each bar shows percent **used** and its reset time. Version 3.0.1 is build 301.
 
 ![Claw'd idle widget pose](docs/pose-idle.png)
 
