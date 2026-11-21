@@ -1,8 +1,10 @@
-# Claude Usage 3.0 🦀
+# Claude Usage 3.1 🦀
 
 A native macOS menu bar app and floating desktop widget for Claude and Codex
 subscription usage. Orange shows 5-hour usage; purple shows weekly usage.
-Each bar shows percent **used** and its reset time. Version 3.0.1 is build 301.
+Each bar shows percent **used** and its reset time. Version 3.1.0 is build 310.
+
+Changelog — **3.1.0:** adds API credit balances, expiry dates and low-credit warnings for Claude API and OpenAI API.
 
 ![Claw'd idle widget pose](docs/pose-idle.png)
 
@@ -131,6 +133,37 @@ asks for confirmation. Sign in starts a visible `claude auth login` in Terminal.
 Bridge token files remain unchanged. Old `barMode` preferences migrate once:
 Off becomes Claw'd alone; 5-Hour/Weekly/Both becomes the
 corresponding value selection.
+
+The **API credits** section below the account rows shows prepaid balances, a thin
+remaining-credit meter and the amount of the next expiring grant. Click a provider to open its
+billing console. Hide it with **Settings > Menu Bar > Show API credits** (on by
+default). The app refreshes credits with usage and checks again when opening a
+menu whose credit snapshot is more than ten minutes old; failures keep the last
+snapshot, marked overdue after thirty minutes without a successful fetch.
+Anchors at least seven days old show their date. No live grants means no meter
+or low-credit warning. QA and menu previews include healthy and warning balances.
+
+The server reads `CREDITS_CONFIG` or
+`~/Dropbox/Macbook Pro/Happlen/agents/infra/fleet/api-credits/credits.json`.
+It subtracts post-anchor spend from `*.jsonl` files in that directory's `ledger/`
+and `~/.local/state/api-credits/ledger/`, deduplicating record IDs (or identical
+lines without IDs). Override the ledger directories with colon-separated
+`API_CREDITS_LEDGER_DIRS`. Empty files, malformed records and unpriced usage mark
+the balance as an upper bound (`≤`) in its row, tooltip and accessibility label.
+Spend consumes grants in expiry order; expired grants contribute neither balance
+nor granted totals. OpenAI uses each grant's remaining-at-anchor balance. Claude
+has one promo bucket tied to the latest grant expiry, and only `claude_api`
+ledger records consume that bucket; other tools bill purchased credit.
+The Claude row uses the promotional balance; `GET /api/credits` also returns the
+purchased balance as `extra`.
+
+For OpenAI, an optional `OPENAI_ADMIN_KEY_FILE` (default
+`~/.secrets/api-credits/openai-admin.key`) enables the organization Costs API,
+cached for thirty minutes, with ledger fallback and a five-minute retry delay on
+failure. Requests refuse redirects and count USD costs only. The key stays in the
+server and is never returned or logged. No config means no credit section.
+An unreadable config returns a recoverable error; one invalid provider produces
+an unavailable row while the others continue to render.
 
 ## Multiple accounts
 
@@ -321,7 +354,7 @@ future archive/upload steps.
 ```text
 project.yml                         XcodeGen source for ClaudeUsage and its scheme
 ClaudeUsage.xcodeproj/               Generated Xcode project
-Config/Shared.xcconfig               Version 3.0, build 300, macOS 14 target
+Config/Shared.xcconfig               Version 3.1.0, build 310, macOS 14 target
 Config/Info.plist                    Bundle metadata
 Config/ClaudeUsage.entitlements      Developer ID app entitlements
 Config/ClaudeUsage-AppStore.entitlements  Future sandbox entitlements

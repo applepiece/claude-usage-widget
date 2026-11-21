@@ -12,6 +12,17 @@
         }
       }
     },
+    "%@ left": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ left"
+          }
+        }
+      }
+    },
     "%@ old": {
       "extractionState": "manual",
       "localizations": {
@@ -78,6 +89,17 @@
         }
       }
     },
+    "API credits": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "API credits"
+          }
+        }
+      }
+    },
     "About": {
       "extractionState": "manual",
       "localizations": {
@@ -129,6 +151,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Automatic (%@)"
+          }
+        }
+      }
+    },
+    "Balance update overdue": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Balance update overdue"
           }
         }
       }
@@ -316,6 +349,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "General"
+          }
+        }
+      }
+    },
+    "Invalid balance": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid balance"
           }
         }
       }
@@ -760,6 +804,17 @@
         }
       }
     },
+    "Show API credits": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show API credits"
+          }
+        }
+      }
+    },
     "Show Claw'd on the desktop": {
       "extractionState": "manual",
       "localizations": {
@@ -969,6 +1024,17 @@
         }
       }
     },
+    "Unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unavailable"
+          }
+        }
+      }
+    },
     "Up to date": {
       "extractionState": "manual",
       "localizations": {
@@ -1119,6 +1185,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Window"
+          }
+        }
+      }
+    },
+    "balance from %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "balance from %@"
+          }
+        }
+      }
+    },
+    "of %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "of %@"
+          }
+        }
+      }
+    },
+    "of %@ · %@ expires %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "of %@ · %@ expires %@"
+          }
+        }
+      }
+    },
+    "of %@ · expires %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "of %@ · expires %@"
           }
         }
       }

@@ -1,6 +1,21 @@
 import Cocoa
 import UsageKit
 
+@MainActor
+func sampleCredits(now: Date = Date()) -> [CreditProvider] {
+    let anchor = UsageFormatting.iso.string(from: now)
+    return [
+        CreditProvider(id: "anthropic", label: "Claude API", remaining: 199.95, granted: 200,
+                       spentSinceAnchor: 0.05, anchorAt: anchor,
+                       nextExpiry: CreditExpiry(date: UsageFormatting.iso.string(from: now.addingTimeInterval(18 * 86400)), amount: 200),
+                       console: "https://platform.claude.com/settings/billing", extra: 9.07),
+        CreditProvider(id: "openai", label: "OpenAI API", remaining: 5.25, granted: 100,
+                       spentSinceAnchor: 94.75, spendSource: .costsAPI, anchorAt: anchor,
+                       nextExpiry: CreditExpiry(date: UsageFormatting.iso.string(from: now.addingTimeInterval(2 * 86400)), amount: 5.25),
+                       console: "https://platform.openai.com/settings/organization/billing/credit-grants"),
+    ]
+}
+
 // Development-only offscreen rendering. No window, panel, status item, app
 // launch callback, login registration or network request is created here.
 @MainActor
@@ -64,7 +79,7 @@ private final class MenuPreviewRow: NSView {
             .font: font, .foregroundColor: item.isEnabled ? NSColor.labelColor : NSColor.secondaryLabelColor,
         ]
         let title = item.attributedTitle ?? NSAttributedString(string: item.title, attributes: attributes)
-        title.draw(in: NSRect(x: AccountMenuTitle.titleInset, y: 4, width: AccountMenuTitle.weeklyTab, height: 18))
+        title.draw(in: NSRect(x: AccountMenuTitle.titleInset, y: 4, width: AccountMenuTitle.weeklyTab, height: bounds.height - 8))
         if item.state == .on {
             NSAttributedString(string: "✓", attributes: attributes).draw(at: NSPoint(x: 6, y: 4))
         } else if item.state == .mixed {
@@ -152,6 +167,7 @@ func renderPreview(kind: String, path: String, dark: Bool, signedOut: Bool, two:
         defaults.register(defaults: ["primaryAccount": "pho", "secondaryAccount": "codex-pro"])
         let delegate = AppDelegate(preferences: Preferences(defaults))
         delegate.accounts = signedOut ? [] : samples
+        delegate.model.creditSnapshot = CreditSnapshot(providers: sampleCredits(), updatedAt: Date())
         delegate.model.lastUpdate = delegate.accounts.compactMap(MenuFormatting.timestamp).max()
         delegate.model.widgetVisible = true
         var menu = NSMenu()
@@ -159,7 +175,7 @@ func renderPreview(kind: String, path: String, dark: Bool, signedOut: Bool, two:
         appearance.performAsCurrentDrawingAppearance { menu = delegate.buildMenu() }
         let items = menu.items.filter { !$0.isAlternate }
         let heights: [CGFloat] = items.map {
-            $0.view?.frame.height ?? ($0.isSeparatorItem ? 10 : 24)
+            $0.view?.frame.height ?? ($0.isSeparatorItem ? 10 : max(24, ceil($0.attributedTitle?.size().height ?? 16) + 8))
         }
         let height = heights.reduce(16, +)
         canvas = PreviewCanvas(frame: NSRect(x: 0, y: 0, width: 300, height: height))

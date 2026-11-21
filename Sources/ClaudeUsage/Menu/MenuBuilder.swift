@@ -60,7 +60,10 @@ extension AppDelegate: NSMenuDelegate {
             }
             menu.addItem(.separator())
         }
-        menu.addItem(action(String(localized: "Show Widget"), #selector(toggleWidget), checked: model.widgetVisible))
+        let widget = action(String(localized: "Show Widget"), #selector(toggleWidget), checked: model.widgetVisible)
+        widget.identifier = NSUserInterfaceItemIdentifier("widget")
+        menu.addItem(widget)
+        updateCreditsMenu(in: menu, now: now)
         let refresh = action(model.refreshing ? String(localized: "Refreshing…") : String(localized: "Refresh"),
                              #selector(refreshNow))
         refresh.identifier = NSUserInterfaceItemIdentifier("refresh")
@@ -74,6 +77,7 @@ extension AppDelegate: NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         trackingMenu = menu
+        refreshCredits()
         if qa.enabled, qa.open == "menu", !qaReadySent {
             // Common mode runs after AppKit has laid out and displayed the tracking menu.
             let timer = Timer(timeInterval: 0.15, target: self, selector: #selector(announceQAReady), userInfo: nil, repeats: false)
@@ -83,6 +87,44 @@ extension AppDelegate: NSMenuDelegate {
 
     func menuDidClose(_ menu: NSMenu) {
         if trackingMenu === menu { trackingMenu = nil }
+    }
+
+    func updateCreditsMenu(in menu: NSMenu, now: Date = Date()) {
+        for item in menu.items where item.identifier?.rawValue.hasPrefix("credits.") == true {
+            menu.removeItem(item)
+        }
+        guard preferences.showAPICredits, !model.credits.isEmpty,
+              let widget = menu.items.first(where: { $0.identifier?.rawValue == "widget" }) else { return }
+        var index = menu.index(of: widget)
+        func insert(_ item: NSMenuItem, id: String) {
+            item.identifier = NSUserInterfaceItemIdentifier("credits." + id)
+            menu.insertItem(item, at: index)
+            index += 1
+        }
+        let header = NSMenuItem(title: String(localized: "API credits"), action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        header.attributedTitle = NSAttributedString(string: header.title, attributes: [
+            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        insert(header, id: "header")
+        for provider in model.credits {
+            let item = action(provider.label, #selector(openCreditsConsole(_:)), value: provider.console)
+            let row = CreditRowPresentation(provider, updatedAt: model.creditsUpdatedAt, now: now)
+            item.attributedTitle = CreditMenuTitle.make(provider, row: row)
+            item.isEnabled = provider.console != nil
+            item.toolTip = row.detail
+            item.setAccessibilityLabel(row.detail)
+            item.setAccessibilityHelp(provider.note)
+            insert(item, id: provider.id)
+        }
+        insert(.separator(), id: "separator")
+    }
+
+    @objc func openCreditsConsole(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String, let url = URL(string: value),
+              url.scheme == "https", url.host != nil else { return }
+        NSWorkspace.shared.open(url)
     }
 
     func updateRefreshMenuItem() {

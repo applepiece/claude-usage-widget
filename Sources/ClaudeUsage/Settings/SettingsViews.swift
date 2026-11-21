@@ -84,6 +84,7 @@ private struct MenuBarSettings: View {
     @AppStorage("barMetric") private var metric = "max"
     @AppStorage("barNumbers") private var numbers = true
     @AppStorage("menuBarAlways") private var always = true
+    @AppStorage("showAPICredits") private var showAPICredits = true
 
     private var appearance: NSAppearance { NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua) ?? NSApp.effectiveAppearance }
     private var shownAccounts: [UsageAccount] {
@@ -121,6 +122,7 @@ private struct MenuBarSettings: View {
                     Text("Off shows Claw'd alone.").font(.caption).foregroundStyle(.secondary)
                 }
                 Toggle("Keep icon in the menu bar", isOn: $always)
+                Toggle("Show API credits", isOn: $showAPICredits)
             } footer: {
                 Text("When off, the icon appears only while the widget is tucked away.").measureSettingsSection()
             }.measureSettingsSection()

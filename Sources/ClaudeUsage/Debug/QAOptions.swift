@@ -39,7 +39,7 @@ struct QAOptions {
                 if let names = try? JSONDecoder().decode([String: String].self, from: Data(value.utf8)) {
                     defaults.set(names, forKey: key)
                 }
-            } else if ["barNumbers", "menuBarAlways", "minimized"].contains(key) {
+            } else if ["barNumbers", "menuBarAlways", "minimized", "showAPICredits"].contains(key) {
                 defaults.set(["true", "1", "yes"].contains(value.lowercased()), forKey: key)
             } else { defaults.set(value, forKey: key) }
         }

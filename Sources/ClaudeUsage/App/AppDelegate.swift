@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         set { model.refreshing = newValue; updateRefreshMenuItem() }
     }
     var refreshPending = false
+    var creditsRefreshing = false
     var switchWatch: Timer?
     var previous: [String: UsageAccount] = [:]
     var danceEnds: [String: Date] = [:]
@@ -59,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
             }
             accounts = qa.accounts()
+            model.creditSnapshot = CreditSnapshot(providers: sampleCredits(), updatedAt: Date())
             model.refreshing = qa.state == "refreshing"
         }
         model.widgetAction = { [weak self] visible in
@@ -135,6 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
                 self.updateUI()
+                if let menu = self.trackingMenu { self.updateCreditsMenu(in: menu) }
             }
         }
     }
@@ -321,7 +324,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !qa.enabled else { return }
         guard !refreshing else { return }
         refreshing = true
+        refreshCredits(force: true)
         Task { receive(await client.accounts()) }
+    }
+
+    func refreshCredits(force: Bool = false) {
+        guard !qa.enabled, !creditsRefreshing else { return }
+        if !force, let updatedAt = model.creditsUpdatedAt, Date().timeIntervalSince(updatedAt) <= 600 { return }
+        creditsRefreshing = true
+        Task {
+            defer { creditsRefreshing = false }
+            // Keep both the last snapshot and its age after a transport/decode failure.
+            model.creditSnapshot.receive(await client.credits(), now: Date())
+            if let menu = trackingMenu { updateCreditsMenu(in: menu) }
+        }
     }
 
     @objc func startLogin() {

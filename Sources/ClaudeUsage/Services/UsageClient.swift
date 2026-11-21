@@ -41,6 +41,14 @@ struct UsageClient: Sendable {
         }
     }
 
+    func credits() async -> CreditsResponse? {
+        var request = URLRequest(url: AppURLs.server.appendingPathComponent("api/credits"))
+        request.timeoutInterval = 100
+        guard let (data, response) = try? await session.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return try? JSONDecoder().decode(CreditsResponse.self, from: data)
+    }
+
     func post(_ route: String, account: String? = nil, timeout: TimeInterval = 100) async -> Bool {
         guard var components = URLComponents(url: AppURLs.server.appendingPathComponent("api/" + route),
                                              resolvingAgainstBaseURL: false) else { return false }

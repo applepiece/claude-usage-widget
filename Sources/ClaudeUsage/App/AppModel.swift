@@ -5,6 +5,9 @@ import UsageKit
 @MainActor @Observable
 final class AppModel {
     var accounts: [UsageAccount] = []
+    var creditSnapshot = CreditSnapshot()
+    var credits: [CreditProvider] { creditSnapshot.providers }
+    var creditsUpdatedAt: Date? { creditSnapshot.updatedAt }
     var refreshing = false
     var lastUpdate: Date?
     var widgetVisible = false

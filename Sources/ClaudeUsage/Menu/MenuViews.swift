@@ -276,7 +276,7 @@ enum AccountMenuTitle {
         ])
     }
 
-    private static func fittedLabel(_ label: String, width: CGFloat) -> String {
+    static func fittedLabel(_ label: String, width: CGFloat) -> String {
         // Embedded newlines/tabs must not create a second line or a third column.
         let singleLine = label.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
         func measured(_ value: String) -> CGFloat {
@@ -288,14 +288,14 @@ enum AccountMenuTitle {
         return prefix + "…"
     }
 
-    private static func attachment(_ image: NSImage, y: CGFloat) -> NSAttributedString {
+    static func attachment(_ image: NSImage, y: CGFloat) -> NSAttributedString {
         let attachment = NSTextAttachment()
         attachment.image = image
         attachment.bounds = NSRect(origin: NSPoint(x: 0, y: y), size: image.size)
         return NSAttributedString(attachment: attachment)
     }
 
-    private static func providerGlyph(_ provider: Provider) -> NSImage {
+    static func providerGlyph(_ provider: Provider) -> NSImage {
         // Drawn at display time so labelColor follows the menu, not the menu bar.
         NSImage(size: NSSize(width: 12, height: 12), flipped: false) { _ in
         if provider == .claude {
@@ -330,6 +330,52 @@ enum AccountMenuTitle {
         text.append(NSAttributedString(string: value.map { String(Int($0.rounded())) } ?? "–", attributes: [
             .font: numberFont, .foregroundColor: (value ?? 0) >= 90 ? NSColor.labelColor : NSColor.secondaryLabelColor,
         ]))
+        return text
+    }
+}
+
+/// Native items preserve AppKit's highlight, keyboard and click behavior.
+@MainActor
+enum CreditMenuTitle {
+    static func make(_ provider: CreditProvider, row: CreditRowPresentation) -> NSAttributedString {
+        let tint: NSColor = row.warning ? .systemOrange : (row.stale ? .secondaryLabelColor : .labelColor)
+        let font = NSFont.systemFont(ofSize: 13)
+        let numberFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        let amountWidth = (row.amount as NSString).size(withAttributes: [.font: numberFont]).width
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: AccountMenuTitle.weeklyTab)]
+        paragraph.defaultTabInterval = 0
+        paragraph.baseWritingDirection = .leftToRight
+        paragraph.lineBreakMode = .byClipping
+        let text = NSMutableAttributedString(attributedString: AccountMenuTitle.attachment(
+            AccountMenuTitle.providerGlyph(provider.id == "anthropic" ? .claude : .codex), y: -2))
+        let label = AccountMenuTitle.fittedLabel(provider.label, width: max(0, AccountMenuTitle.weeklyTab - amountWidth - 28))
+        text.append(NSAttributedString(string: " " + label, attributes: [.font: font, .foregroundColor: NSColor.labelColor]))
+        text.append(NSAttributedString(string: "\t" + row.amount, attributes: [.font: numberFont, .foregroundColor: tint]))
+        if row.showsMeter {
+            text.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 11)]))
+            // Both track and fill resolve colors while drawing in the menu's appearance.
+            let meter = NSImage(size: NSSize(width: 40, height: 4), flipped: false) { _ in
+                NSColor.labelColor.withAlphaComponent(0.18).setFill()
+                NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: 40, height: 4), xRadius: 2, yRadius: 2).fill()
+                if row.fraction > 0 {
+                    (row.warning ? NSColor.systemOrange : usagePurple).setFill()
+                    NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: max(2, 40 * row.fraction), height: 4), xRadius: 2, yRadius: 2).fill()
+                }
+                return true
+            }
+            text.append(AccountMenuTitle.attachment(meter, y: 3))
+            text.append(NSAttributedString(string: "  " + row.subtitle, attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
+                .foregroundColor: row.warning ? NSColor.systemOrange : NSColor.secondaryLabelColor,
+            ]))
+        }
+        if !row.annotation.isEmpty {
+            text.append(NSAttributedString(string: "\n" + row.annotation, attributes: [
+                .font: NSFont.systemFont(ofSize: 10), .foregroundColor: NSColor.secondaryLabelColor,
+            ]))
+        }
+        text.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: text.length))
         return text
     }
 }

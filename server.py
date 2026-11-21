@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import select
 import shlex
 import shutil
@@ -19,12 +20,12 @@ import threading
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode
 
-SERVER_VERSION = "3.0.1"
+SERVER_VERSION = "3.1.0"
 PORT = 8737
 SERVICE = "Claude Code-credentials"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -865,6 +866,273 @@ def fetch_accounts():
             "fetched_at": time.time()}
 
 
+# API credits are independent of subscription accounts and their credentials.
+_credits_lock = threading.Lock()
+_costs_cache = {"at": 0.0, "key": None, "spent": None, "ttl": 0.0}
+COSTS_CACHE_SECONDS = 30 * 60
+COSTS_RETRY_SECONDS = 5 * 60
+
+
+class CreditConfigError(ValueError):
+    """A public, fixed diagnostic; never includes config or credential contents."""
+
+
+class NoCreditRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_credits_opener = urllib.request.build_opener(NoCreditRedirects())
+
+
+def credit_timestamp(value):
+    """Normalize ISO timestamps before fromisoformat for Python 3.9 compatibility."""
+    if not isinstance(value, str):
+        raise ValueError("invalid timestamp")
+    value = value.strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return datetime.fromisoformat(value).replace(
+            tzinfo=timezone(timedelta(hours=7))).timestamp()
+    value = re.sub(r"Z$", "+00:00", value)
+    value = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", value)
+    value = re.sub(r"(\d{2}:\d{2}:\d{2})[.,](\d+)",
+                   lambda match: match[1] + "." + (match[2] + "000000")[:6], value)
+    date = datetime.fromisoformat(value)
+    if date.tzinfo is None:
+        date = date.replace(tzinfo=timezone.utc)
+    return date.timestamp()
+
+
+def credit_number(value):
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or value < 0):
+        raise ValueError("invalid credit amount")
+    return value
+
+
+def credit_ledger_spend(anchors):
+    """Unknown/corrupt records make the affected provider's sum a lower bound."""
+    defaults = [Path.home() / "Dropbox/Macbook Pro/Happlen/agents/infra/fleet/api-credits/ledger",
+                Path.home() / ".local/state/api-credits/ledger"]
+    override = os.environ.get("API_CREDITS_LEDGER_DIRS")
+    directories = ([Path(p).expanduser() for p in override.split(os.pathsep) if p]
+                   if override is not None else defaults)
+    totals = {provider: [] for provider in anchors}
+    partial = set()
+    seen = set()
+    for directory in directories:
+        try:
+            paths = sorted(directory.glob("*.jsonl"))
+        except OSError:
+            partial.update(anchors)
+            continue
+        for path in paths:
+            try:
+                if path.stat().st_size == 0:
+                    partial.update(anchors)
+                with path.open(encoding="utf-8", errors="replace") as ledger:
+                    for line in ledger:
+                        affected = anchors
+                        try:
+                            entry = json.loads(line)
+                            if not isinstance(entry, dict):
+                                raise ValueError("invalid ledger record")
+                            provider = entry.get("provider")
+                            if not isinstance(provider, str):
+                                raise ValueError("invalid ledger provider")
+                            if provider not in anchors:
+                                continue
+                            affected = [provider]
+                            if provider == "anthropic" and entry.get("tool") != "claude_api":
+                                continue
+                            if "id" in entry:
+                                if not isinstance(entry["id"], str) or not entry["id"]:
+                                    raise ValueError("invalid ledger id")
+                                identity = ("id", entry["id"])
+                            else:
+                                identity = ("line", line.strip())
+                            at = credit_timestamp(entry["ts"])
+                            usd = credit_number(entry["usd"])
+                            if identity in seen:
+                                continue
+                            seen.add(identity)
+                            if at > anchors[provider]:
+                                totals[provider].append(usd)
+                        except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+                            partial.update(affected)
+            except OSError:
+                partial.update(anchors)
+    return {provider: (math.fsum(costs), provider in partial) for provider, costs in totals.items()}
+
+
+def openai_credit_spend(anchor):
+    """Fetch without the cache lock or redirects; cache successes and failures."""
+    try:
+        key_path = Path(os.environ.get("OPENAI_ADMIN_KEY_FILE",
+                                      "~/.secrets/api-credits/openai-admin.key")).expanduser()
+        key = key_path.read_text().strip()
+        if not key or any(c.isspace() for c in key):
+            return None
+    except (OSError, UnicodeError):
+        return None
+    cache_key = (anchor, hashlib.sha256(key.encode()).hexdigest())
+    with _credits_lock:
+        if (_costs_cache["key"] == cache_key
+                and time.time() - _costs_cache["at"] < _costs_cache["ttl"]):
+            return _costs_cache["spent"]
+    spent = None
+    try:
+        amounts = []
+        page = None
+        pages = set()
+        while True:
+            query = {"start_time": int(anchor), "bucket_width": "1d", "limit": 180}
+            if page is not None:
+                query["page"] = page
+            request = urllib.request.Request(
+                "https://api.openai.com/v1/organization/costs?" + urlencode(query),
+                headers={"Authorization": "Bearer " + key})
+            with _credits_opener.open(request, timeout=20) as response:
+                body = json.load(response)
+            for bucket in body["data"]:
+                if credit_number(bucket["end_time"]) <= anchor:
+                    continue
+                for result in bucket["results"]:
+                    amount = result["amount"]
+                    currency = amount.get("currency")
+                    if isinstance(currency, str) and currency.lower() == "usd":
+                        amounts.append(credit_number(amount["value"]))
+            if not body.get("has_more", False):
+                break
+            page = body.get("next_page")
+            if not isinstance(page, str) or not page or page in pages:
+                raise ValueError("invalid costs pagination")
+            pages.add(page)
+        spent = credit_number(math.fsum(amounts))
+    except Exception:
+        # HTTP errors can contain request headers. Never log or serialize them.
+        pass
+    with _credits_lock:
+        _costs_cache.update(at=time.time(), key=cache_key, spent=spent,
+                            ttl=COSTS_CACHE_SECONDS if spent is not None else COSTS_RETRY_SECONDS)
+    return spent
+
+
+def credit_grants(provider, data, anchor_at):
+    """Build remaining-at-anchor buckets, preserving original grant amounts."""
+    try:
+        raw_grants = data["grants"]
+        if not isinstance(raw_grants, list):
+            raise ValueError()
+        grants = [{"date": grant["expires"], "at": credit_timestamp(grant["expires"]),
+                   "amount": credit_number(grant["amount"]),
+                   "remaining": credit_number(grant.get("remaining", grant["amount"]))}
+                  for grant in raw_grants]
+    except (KeyError, ValueError, TypeError, OverflowError):
+        raise CreditConfigError("invalid grant") from None
+    if provider == "anthropic":
+        try:
+            promo = credit_number(data["anchor"]["promo_remaining"])
+            extra = credit_number(data["anchor"].get("purchased_remaining", 0))
+        except (KeyError, ValueError, TypeError):
+            raise CreditConfigError("invalid balance") from None
+        for grant in grants:
+            grant["remaining"] = 0
+        if grants:
+            max(grants, key=lambda grant: grant["at"])["remaining"] = promo
+    else:
+        extra = None
+    # Grants already expired at the anchor cannot absorb subsequent spend.
+    for grant in grants:
+        if grant["at"] <= anchor_at:
+            grant["remaining"] = 0
+    return sorted(grants, key=lambda grant: grant["at"]), extra
+
+
+def credit_provider(provider, data, anchor_at, grants, extra, ledger, now):
+    spent, partial = ledger
+    source = "ledger_partial" if partial else "ledger"
+    if provider == "openai":
+        exact = openai_credit_spend(anchor_at)
+        if exact is not None:
+            spent, partial, source = exact, False, "costs_api"
+    unallocated = spent
+    for grant in grants:
+        used = min(unallocated, grant["remaining"])
+        grant["remaining"] -= used
+        unallocated -= used
+    live = [grant for grant in grants if grant["at"] > now]
+    next_grant = next((grant for grant in live if grant["remaining"] > 0), None)
+    note = data.get("note") or ""
+    if not isinstance(note, str):
+        raise CreditConfigError("invalid note")
+    if partial:
+        note = (note + " " if note else "") + "Upper bound: ledger is incomplete or includes usage with unknown cost."
+    row = {
+        "id": provider, "label": data["label"],
+        "remaining": math.fsum(grant["remaining"] for grant in live),
+        "granted": math.fsum(grant["amount"] for grant in live),
+        "spent_since_anchor": spent, "spend_source": source, "anchor_at": data["anchor"]["at"],
+        "next_expiry": ({"date": next_grant["date"], "amount": next_grant["remaining"]} if next_grant else None),
+        "console": data["console"], "stale_days": max(0, int((now - anchor_at) // 86400)), "note": note,
+    }
+    if extra is not None:
+        row["extra"] = extra
+    return row
+
+
+def fetch_credits():
+    path = Path(os.environ.get("CREDITS_CONFIG", str(
+        Path.home() / "Dropbox/Macbook Pro/Happlen/agents/infra/fleet/api-credits/credits.json"))).expanduser()
+    try:
+        config = json.loads(path.read_text())
+        providers = config["providers"]
+        if not isinstance(providers, dict):
+            raise ValueError()
+    except FileNotFoundError:
+        return {"providers": []}
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError):
+        return {"providers": [], "error": "config unreadable"}
+    now = time.time()
+    prepared = {}
+    errors = {}
+    for provider in ("anthropic", "openai"):
+        if provider not in providers:
+            continue
+        try:
+            data = providers[provider]
+            if not isinstance(data.get("label"), str) or not isinstance(data.get("console"), str):
+                raise CreditConfigError("invalid provider")
+            try:
+                anchor_at = credit_timestamp(data["anchor"]["at"])
+            except (KeyError, ValueError, TypeError, OverflowError):
+                raise CreditConfigError("invalid anchor") from None
+            grants, extra = credit_grants(provider, data, anchor_at)
+            prepared[provider] = (anchor_at, grants, extra)
+        except Exception as error:
+            errors[provider] = str(error) if isinstance(error, CreditConfigError) else "invalid provider"
+    ledger = credit_ledger_spend({provider: values[0] for provider, values in prepared.items()})
+    result = []
+    for provider in ("anthropic", "openai"):
+        if provider not in providers:
+            continue
+        data = providers[provider]
+        try:
+            if provider in errors:
+                raise CreditConfigError(errors[provider])
+            anchor_at, grants, extra = prepared[provider]
+            row = credit_provider(provider, data, anchor_at, grants, extra, ledger[provider], now)
+        except Exception as error:
+            row = {"id": provider, "label": "Claude API" if provider == "anthropic" else "OpenAI API",
+                   "error": str(error) if isinstance(error, CreditConfigError) else "invalid provider"}
+            if isinstance(data, dict):
+                for field in ("label", "console"):
+                    if isinstance(data.get(field), str):
+                        row[field] = data[field]
+        result.append(row)
+    return {"providers": result, "updated_at": now}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -903,6 +1171,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, fetch_accounts())
             except Exception:
                 self._json(503, {"error": "accounts_unavailable"})
+        elif path == "/api/credits":
+            try:
+                self._json(200, fetch_credits())
+            except Exception:
+                self._json(503, {"error": "credits_unavailable"})
         elif path == "/api/account":
             try:
                 self._json(200, fetch_account())

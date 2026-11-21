@@ -4,6 +4,7 @@ import builtins
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -13,6 +14,8 @@ from email.message import Message
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlparse
+from urllib.response import addinfourl
 
 import server
 
@@ -137,7 +140,7 @@ class ServerTests(unittest.TestCase):
 
     def fake_codex(self, body):
         path = self.home / "fake-app-server"
-        path.write_text("#!/usr/bin/env python3\n" + body)
+        path.write_text("#!" + sys.executable + "\n" + body)
         path.chmod(0o700)
         return patch.dict(os.environ, {"CLAUDE_USAGE_CODEX_BIN": str(path)})
 
@@ -760,7 +763,7 @@ def send(value):
     print(json.dumps(value), flush=True)
 initialize = receive()
 assert initialize == {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-    "clientInfo": {"name": "claude-usage-widget", "version": "3.0.1"}}}
+    "clientInfo": {"name": "claude-usage-widget", "version": "3.1.0"}}}
 send({"method": "configWarning", "params": {}})
 send({"id": 1, "result": {}})
 assert receive() == {"jsonrpc": "2.0", "method": "initialized"}
@@ -776,7 +779,7 @@ sys.stdin.read()
         home = self.home / "fixture-home"
         with self.fake_codex(body), patch.dict(os.environ, {"OPENAI_API_KEY": "fixture-key", "CODEX_API_KEY": "fixture-key"}), \
                 patch.object(server.subprocess, "Popen", side_effect=self.real_popen) as launch:
-            account, limits = server.codex_app_server_read(home, timeout=2)
+            account, limits = server.codex_app_server_read(home, timeout=10)
             self.assertEqual(os.environ["OPENAI_API_KEY"], "fixture-key")
             self.assertEqual(os.environ["CODEX_API_KEY"], "fixture-key")
         self.assertEqual(account["account"]["email"], "fake@example.com")
@@ -795,8 +798,10 @@ sys.stdin.read()
         with self.fake_codex('import time\ntime.sleep(30)\n'), patch.object(server.subprocess, "Popen", side_effect=launch):
             start = time.monotonic()
             with self.assertRaises(TimeoutError):
-                server.codex_app_server_read(self.home, timeout=2)
-            self.assertLess(time.monotonic() - start, 5)
+                server.codex_app_server_read(self.home, timeout=10)
+            elapsed = time.monotonic() - start
+            self.assertGreaterEqual(elapsed, 9)
+            self.assertLess(elapsed, 15)
         self.assertEqual(len(children), 1)
         self.assertIsNotNone(children[0].poll())
         self.assertTrue(children[0].stdin.closed)
@@ -816,7 +821,7 @@ sys.stdin.read()
                         'print(' + repr(response if isinstance(response, str) else json.dumps(response)) + ', flush=True)\n')
                 with self.fake_codex(body), patch.object(server.subprocess, "Popen", side_effect=self.real_popen):
                     with self.assertRaises(exception):
-                        server.codex_app_server_read(self.home, timeout=2)
+                        server.codex_app_server_read(self.home, timeout=10)
 
     def test_codex_binary_search_precedence_and_missing_binary(self):
         local = self.home / ".local/bin/codex"
@@ -850,7 +855,7 @@ sys.stdin.read()
         with patch.object(server, "fetch_usage", return_value=usage), patch.object(server, "fetch_account", return_value={"logged_in": False}):
             self.assertEqual(json.loads(self.request("GET", "/api/usage")[1]), usage)
             self.assertEqual(json.loads(self.request("GET", "/api/account")[1]), {"logged_in": False})
-        self.assertEqual(self.request("GET", "/api/ping"), (200, b'{"ok":true,"version":"3.0.1"}'))
+        self.assertEqual(self.request("GET", "/api/ping"), (200, b'{"ok":true,"version":"3.1.0"}'))
         for path in ("/", "/index.html"):
             code, body = self.request("GET", path)
             self.assertEqual(code, 200)
@@ -907,6 +912,381 @@ sys.stdin.read()
             self.assertTrue(called.wait(timeout=2))
         httpd.shutdown.assert_called_once_with()
         self.assertIsNot(shutdown_threads[0], threading.current_thread())
+
+
+class CreditsTests(unittest.TestCase):
+    request = ServerTests.request
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.home = Path(temp.name)
+        self.config = self.home / "credits.json"
+        self.dirs = [self.home / "fleet-ledger", self.home / "local-ledger"]
+        for directory in self.dirs:
+            directory.mkdir()
+        self.key = self.home / "admin.key"
+        self.anchor = "2026-11-20T00:00:00Z"
+        self.now = datetime(2026, 11, 24, 12, tzinfo=timezone.utc).timestamp()
+        self.data = {"providers": {
+            "anthropic": {"label": "Claude API", "console": "https://example.com/claude",
+                          "anchor": {"at": self.anchor, "promo_remaining": 199.95, "purchased_remaining": 9.07},
+                          "grants": [{"name": "promo", "amount": 200, "expires": "2026-12-09T00:00:00Z"}]},
+            "openai": {"label": "OpenAI API", "console": "https://example.com/openai", "note": "Fixture note.",
+                       "anchor": {"at": self.anchor, "remaining": 90.08},
+                       "grants": [{"amount": 51, "expires": "2026-12-06T00:00:00Z"},
+                                  {"amount": 50, "remaining": 28.67, "expires": "2026-11-28T00:00:00Z"},
+                                  {"amount": 10, "remaining": 10, "expires": "2027-06-01T00:00:00Z"},
+                                  {"amount": 5, "remaining": 0.41, "expires": "2027-06-01T00:00:00Z"}]}}}
+        self.save_config()
+        self.enter(patch.object(Path, "home", return_value=self.home))
+        self.enter(patch.dict(os.environ, {"CREDITS_CONFIG": str(self.config),
+                                          "API_CREDITS_LEDGER_DIRS": os.pathsep.join(map(str, self.dirs)),
+                                          "OPENAI_ADMIN_KEY_FILE": str(self.key)}))
+        self.clock = self.enter(patch.object(server.time, "time", return_value=self.now))
+        self.urlopen = self.enter(patch.object(server._credits_opener, "open",
+                                               side_effect=AssertionError("network forbidden")))
+        server._costs_cache.update(at=0, key=None, spent=None, ttl=0)
+        duplicate = self.entry("anthropic", 2.5)
+        (self.dirs[0] / "one.jsonl").write_text("\n".join([
+            duplicate, "not json", "[]", self.entry("anthropic", 900, "2026-11-19T00:00:00Z"),
+            self.entry("anthropic", 100, self.anchor), self.entry("openai", 1.25),
+            self.entry("openai", None), self.entry("other", 100)]) + "\n")
+        (self.dirs[1] / "two.jsonl").write_text(duplicate + "\n" + self.entry("anthropic", 0.05) + "\n")
+
+    def enter(self, mock):
+        value = mock.start()
+        self.addCleanup(mock.stop)
+        return value
+
+    def save_config(self):
+        self.config.write_text(json.dumps(self.data))
+
+    def entry(self, provider, usd, ts="2026-11-21T01:00:00+00:00"):
+        return json.dumps({"ts": ts, "host": "fixture", "provider": provider, "tool": "claude_api" if provider == "anthropic" else "fixture",
+                           "model": "fixture", "input_tokens": 5, "output_tokens": 2,
+                           "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+                           "usd": usd, "ok": True})
+
+    def providers(self):
+        return {row["id"]: row for row in server.fetch_credits()["providers"]}
+
+    def cost_page(self, *values, has_more=False, next_page=None, end_time=None, currency="usd"):
+        return {"data": [{"end_time": end_time if end_time is not None else self.now,
+                          "results": [{"amount": {"value": value, "currency": currency}} for value in values]}],
+                "has_more": has_more, "next_page": next_page}
+
+    def clean_ledgers(self):
+        for directory in self.dirs:
+            for path in directory.glob("*.jsonl"):
+                path.unlink()
+
+    def write_ledger(self, entries):
+        (self.dirs[0] / "fixture.jsonl").write_text("\n".join(entries) + "\n")
+
+    def test_credits_route_ledgers_deduplicate_skip_bad_and_pre_anchor(self):
+        code, body = self.request("GET", "/api/credits")
+        self.assertEqual(code, 200)
+        result = json.loads(body)
+        self.assertEqual(result["updated_at"], self.now)
+        claude, openai = result["providers"]
+        self.assertAlmostEqual(claude["spent_since_anchor"], 2.55)
+        self.assertAlmostEqual(claude["remaining"], 197.4)
+        self.assertEqual(claude["granted"], 200)
+        self.assertEqual(claude["extra"], 9.07)
+        self.assertEqual(claude["spend_source"], "ledger_partial")
+        self.assertEqual(claude["anchor_at"], self.anchor)
+        self.assertEqual(claude["stale_days"], 4)
+        self.assertEqual(claude["console"], "https://example.com/claude")
+        self.assertEqual(openai["next_expiry"], {"date": "2026-11-28T00:00:00Z", "amount": 27.42})
+        self.assertEqual(openai["granted"], 116)
+        self.urlopen.assert_not_called()
+
+    def test_null_cost_is_explicitly_partial_upper_bound(self):
+        row = self.providers()["openai"]
+        self.assertEqual(row["spend_source"], "ledger_partial")
+        self.assertEqual(row["spent_since_anchor"], 1.25)
+        self.assertAlmostEqual(row["remaining"], 88.83)
+        self.assertIn("unknown cost", row["note"])
+        self.assertTrue(row["note"].startswith("Fixture note."))
+
+    def test_costs_two_pages_and_thirty_minute_cache(self):
+        self.key.write_text("fixture-admin-key\n")
+        pages = [self.cost_page(2.25, 0.5, has_more=True, next_page="page two/+"), self.cost_page(1)]
+        self.urlopen.side_effect = lambda *args, **kwargs: Response(pages.pop(0))
+        row = self.providers()["openai"]
+        self.assertEqual(row["spend_source"], "costs_api")
+        self.assertEqual(row["spent_since_anchor"], 3.75)
+        self.assertAlmostEqual(row["remaining"], 86.33)
+        self.assertNotIn("unknown cost", row["note"])
+        calls = self.urlopen.call_args_list
+        self.assertEqual(len(calls), 2)
+        first, second = [call.args[0] for call in calls]
+        self.assertEqual(first.get_header("Authorization"), "Bearer fixture-admin-key")
+        self.assertEqual(parse_qs(urlparse(first.full_url).query), {
+            "start_time": [str(int(server.credit_timestamp(self.anchor)))], "bucket_width": ["1d"], "limit": ["180"]})
+        self.assertEqual(parse_qs(urlparse(second.full_url).query)["page"], ["page two/+"])
+        self.clock.return_value += 1799
+        self.assertEqual(self.providers()["openai"]["spent_since_anchor"], 3.75)
+        self.assertEqual(self.urlopen.call_count, 2)
+        self.clock.return_value += 1
+        self.urlopen.side_effect = lambda *args, **kwargs: Response({"data": [], "has_more": False})
+        self.assertEqual(self.providers()["openai"]["spent_since_anchor"], 0)
+        self.assertEqual(self.urlopen.call_count, 3)
+
+    def test_costs_failure_or_invalid_pages_fall_back_without_key_in_response(self):
+        self.key.write_text("fixture-admin-key")
+        for failure in [URLError("fixture-admin-key"),
+                        [self.cost_page(50, has_more=True, next_page="p"),
+                         URLError("fixture-admin-key")],
+                        [{"data": [], "has_more": True, "next_page": None}],
+                        [self.cost_page(None)]]:
+            with self.subTest(failure=type(failure).__name__):
+                server._costs_cache.update(at=0, key=None, spent=None, ttl=0)
+                if isinstance(failure, list):
+                    def respond(*args, **kwargs):
+                        value = failure.pop(0)
+                        if isinstance(value, Exception):
+                            raise value
+                        return Response(value)
+                    self.urlopen.side_effect = respond
+                else:
+                    self.urlopen.side_effect = failure
+                code, body = self.request("GET", "/api/credits")
+                self.assertEqual(code, 200)
+                row = json.loads(body)["providers"][1]
+                self.assertEqual(row["spend_source"], "ledger_partial")
+                self.assertEqual(row["spent_since_anchor"], 1.25)
+                self.assertNotIn(b"fixture-admin-key", body)
+
+    def test_anchor_or_key_change_invalidates_costs_cache(self):
+        self.key.write_text("fixture-admin-key")
+        self.urlopen.side_effect = lambda *args, **kwargs: Response({"data": [], "has_more": False})
+        self.providers()
+        self.data["providers"]["openai"]["anchor"]["at"] = "2026-11-21T00:00:00Z"
+        self.save_config()
+        self.providers()
+        self.key.write_text("rotated-fixture-key")
+        self.providers()
+        self.assertEqual(self.urlopen.call_count, 3)
+
+    def test_zero_floor_no_future_expiry_and_missing_config(self):
+        self.data["providers"]["anthropic"]["anchor"]["promo_remaining"] = 1
+        self.data["providers"]["anthropic"]["grants"] = []
+        self.save_config()
+        row = self.providers()["anthropic"]
+        self.assertEqual(row["remaining"], 0)
+        self.assertIsNone(row["next_expiry"])
+        self.config.unlink()
+        self.assertEqual(json.loads(self.request("GET", "/api/credits")[1]), {"providers": []})
+
+    def test_credits_host_guard_and_bad_config(self):
+        self.assertEqual(self.request("GET", "/api/credits", {"Host": "attacker.example"})[0], 403)
+        self.config.write_text("malformed")
+        self.assertEqual(self.request("GET", "/api/credits"), (200, b'{"providers":[],"error":"config unreadable"}'))
+
+    def test_default_config_and_ledger_directories(self):
+        fleet = self.home / "Dropbox/Macbook Pro/Happlen/agents/infra/fleet/api-credits"
+        local = self.home / ".local/state/api-credits/ledger"
+        (fleet / "ledger").mkdir(parents=True)
+        local.mkdir(parents=True)
+        (fleet / "credits.json").write_text(self.config.read_text())
+        (fleet / "ledger/a.jsonl").write_text(self.entry("anthropic", 3) + "\n")
+        (local / "b.jsonl").write_text(self.entry("anthropic", 4) + "\n")
+        with patch.dict(os.environ):
+            os.environ.pop("CREDITS_CONFIG", None)
+            os.environ.pop("API_CREDITS_LEDGER_DIRS", None)
+            self.assertEqual(self.providers()["anthropic"]["spent_since_anchor"], 7)
+
+    def test_real_grant_shape_after_november_expiry_and_spend_order(self):
+        self.clean_ledgers()
+        self.data["providers"]["openai"]["anchor"] = {"at": "2026-11-21T11:45:00+07:00", "remaining": 90.08}
+        self.data["providers"]["openai"]["grants"] = [
+            {"name": "ChatGPT Pro API credit", "amount": 51, "remaining": 51,
+             "expires": "2026-12-06T00:00:00+07:00"},
+            {"name": "grant Jun 2026", "amount": 50, "remaining": 28.67,
+             "expires": "2026-11-28T00:00:00+07:00"},
+            {"name": "grant May 2026", "amount": 10, "remaining": 10,
+             "expires": "2027-06-01T00:00:00+07:00"},
+            {"name": "grant May 2026", "amount": 5, "remaining": 0.41,
+             "expires": "2027-06-01T00:00:00+07:00"}]
+        self.save_config()
+        self.write_ledger([self.entry("openai", 10, "2026-11-22T00:00:00Z")])
+        self.clock.return_value = server.credit_timestamp("2026-11-29")
+        row = self.providers()["openai"]
+        self.assertAlmostEqual(row["remaining"], 61.41)
+        self.assertEqual(row["granted"], 66)
+        self.assertEqual(row["next_expiry"], {"date": "2026-12-06T00:00:00+07:00", "amount": 51})
+        self.write_ledger([self.entry("openai", 40, "2026-11-22T00:00:00Z")])
+        row = self.providers()["openai"]
+        self.assertAlmostEqual(row["remaining"], 50.08)
+        self.assertAlmostEqual(row["next_expiry"]["amount"], 39.67)
+        self.clock.return_value = server.credit_timestamp("2026-12-07")
+        row = self.providers()["openai"]
+        self.assertAlmostEqual(row["remaining"], 10.41)
+        self.assertEqual(row["granted"], 15)
+        self.assertEqual(row["next_expiry"], {"date": "2027-06-01T00:00:00+07:00", "amount": 10})
+        self.clock.return_value = server.credit_timestamp("2027-06-02")
+        row = self.providers()["openai"]
+        self.assertEqual((row["remaining"], row["granted"], row["next_expiry"]), (0, 0, None))
+
+    def test_anthropic_only_claude_api_spends_latest_expiry_promo_bucket(self):
+        self.clean_ledgers()
+        self.data["providers"]["anthropic"]["grants"].insert(0, {
+            "amount": 50, "expires": "2026-11-28T00:00:00Z"})
+        self.save_config()
+        lines = [json.loads(self.entry("anthropic", amount)) for amount in (1, 3, 4)]
+        lines[1]["tool"], lines[2]["tool"] = "claude_cli", "agent_sdk"
+        self.write_ledger([json.dumps(line) for line in lines])
+        row = self.providers()["anthropic"]
+        self.assertEqual(row["spent_since_anchor"], 1)
+        self.assertEqual(row["spend_source"], "ledger")
+        self.assertAlmostEqual(row["remaining"], 198.95)
+        self.assertEqual(row["next_expiry"], {"date": "2026-12-09T00:00:00Z", "amount": 198.95})
+        self.assertEqual(row["granted"], 250)
+        self.clock.return_value = server.credit_timestamp("2026-11-29")
+        self.assertEqual(self.providers()["anthropic"]["granted"], 200)
+        self.clock.return_value = server.credit_timestamp("2026-12-10")
+        row = self.providers()["anthropic"]
+        self.assertEqual((row["remaining"], row["granted"], row["next_expiry"]), (0, 0, None))
+        self.assertEqual(row["extra"], 9.07)
+
+    def test_empty_or_malformed_ledger_marks_both_providers_partial(self):
+        for content in ("", "not json\n", "[]\n", "\n"):
+            with self.subTest(content=content):
+                self.clean_ledgers()
+                (self.dirs[0] / "bad.jsonl").write_text(content)
+                for row in self.providers().values():
+                    self.assertEqual(row["spend_source"], "ledger_partial")
+                    self.assertEqual(row["spent_since_anchor"], 0)
+
+    def test_invalid_cost_or_timestamp_is_ignored_and_marks_affected_provider_partial(self):
+        valid = json.loads(self.entry("openai", 7))
+        cases = [{**valid, "usd": value} for value in (None, "1.5", -3, True, float("nan"))]
+        cases += [{key: value for key, value in valid.items() if key != "usd"},
+                  {**valid, "ts": "invalid"}, {**valid, "ts": None},
+                  {key: value for key, value in valid.items() if key != "ts"}]
+        for entry in cases:
+            with self.subTest(entry=entry):
+                self.clean_ledgers()
+                self.write_ledger([json.dumps(entry)])
+                rows = self.providers()
+                self.assertEqual(rows["openai"]["spend_source"], "ledger_partial")
+                self.assertEqual(rows["openai"]["spent_since_anchor"], 0)
+                self.assertEqual(rows["anthropic"]["spend_source"], "ledger")
+
+    def test_timestamps_normalize_on_python_39_and_date_only_is_bangkok(self):
+        expected = datetime(2026, 11, 21, 0, 0, tzinfo=timezone.utc).timestamp()
+        for value in ("2026-11-21T00:00:00Z", "2026-11-21T07:00:00+07:00",
+                      "2026-11-21T07:00:00+0700", "2026-11-21T00:00:00"):
+            self.assertEqual(server.credit_timestamp(value), expected)
+        for digits in ("1", "12", "123", "1234", "12345", "123456", "123456789012"):
+            value = "2026-11-21T07:00:00." + digits + "+0700"
+            self.assertAlmostEqual(server.credit_timestamp(value), expected + float("0." + digits[:6]), places=5)
+        self.assertEqual(server.credit_timestamp("2026-11-21"), expected - 7 * 3600)
+        self.clean_ledgers()
+        self.write_ledger([self.entry("openai", 1, value) for value in (
+            "2026-11-21T07:00:00.1+0700", "2026-11-21T00:00:00.123456789Z", "2026-11-21")])
+        row = self.providers()["openai"]
+        self.assertEqual((row["spent_since_anchor"], row["spend_source"]), (3, "ledger"))
+
+    def test_ledger_deduplicates_uuid_across_serializations_and_raw_lines_without_id(self):
+        self.clean_ledgers()
+        first = {**json.loads(self.entry("openai", 3)), "id": "fixture-uuid"}
+        second = {**first, "id": "another-uuid", "usd": 4}
+        raw = self.entry("openai", 2)
+        self.write_ledger([json.dumps(first), json.dumps(second), raw])
+        (self.dirs[1] / "replica.jsonl").write_text(
+            json.dumps(first, sort_keys=True, indent=None, separators=(",", ":")) + "\n" + raw + "\n")
+        row = self.providers()["openai"]
+        self.assertEqual((row["spent_since_anchor"], row["spend_source"]), (9, "ledger"))
+
+    def test_invalid_duplicate_id_record_still_marks_ledger_partial(self):
+        self.clean_ledgers()
+        entry = {**json.loads(self.entry("openai", 3)), "id": "fixture-uuid"}
+        self.write_ledger([json.dumps(entry), json.dumps({**entry, "ts": "invalid"}),
+                           json.dumps({**entry, "usd": -2})])
+        row = self.providers()["openai"]
+        self.assertEqual((row["spent_since_anchor"], row["spend_source"]), (3, "ledger_partial"))
+
+    def test_costs_failure_is_cached_five_minutes_and_network_does_not_hold_lock(self):
+        self.key.write_text("fixture-admin-key")
+        lock_available = []
+        def fail(*args, **kwargs):
+            acquired = server._credits_lock.acquire(blocking=False)
+            lock_available.append(acquired)
+            if acquired:
+                server._credits_lock.release()
+            raise URLError("fixture failure")
+        self.urlopen.side_effect = fail
+        self.assertEqual(self.providers()["openai"]["spend_source"], "ledger_partial")
+        self.assertEqual(lock_available, [True])
+        self.clock.return_value += 299
+        self.providers()
+        self.assertEqual(self.urlopen.call_count, 1)
+        self.clock.return_value += 1
+        self.urlopen.side_effect = lambda *args, **kwargs: Response(self.cost_page(0))
+        self.assertEqual(self.providers()["openai"]["spend_source"], "costs_api")
+        self.assertEqual(self.urlopen.call_count, 2)
+
+    def test_costs_excludes_old_buckets_and_non_usd_amounts(self):
+        self.key.write_text("fixture-admin-key")
+        anchor = server.credit_timestamp(self.anchor)
+        body = self.cost_page(2.5)
+        body["data"] += self.cost_page(100, end_time=anchor)["data"]
+        body["data"] += self.cost_page(200, end_time=anchor - 1)["data"]
+        body["data"] += self.cost_page(None, currency="eur")["data"]
+        body["data"] += self.cost_page(300, currency="")["data"]
+        body["data"] += self.cost_page(None, currency=None)["data"]
+        self.urlopen.side_effect = lambda *args, **kwargs: Response(body)
+        self.assertEqual(self.providers()["openai"]["spent_since_anchor"], 2.5)
+
+    def test_costs_redirect_is_refused_without_sending_authorization_to_new_host(self):
+        self.key.write_text("fixture-admin-key")
+        requests = []
+        class RedirectTransport(server.urllib.request.HTTPSHandler):
+            def https_open(self, request):
+                requests.append(request)
+                headers = Message()
+                headers["Location"] = "https://attacker.example/collect"
+                response = addinfourl(io.BytesIO(b""), headers, request.full_url, code=302)
+                response.msg = "Found"
+                return response
+        opener = server.urllib.request.build_opener(server.NoCreditRedirects(), RedirectTransport())
+        with patch.object(server, "_credits_opener", opener):
+            row = self.providers()["openai"]
+        self.assertEqual(row["spend_source"], "ledger_partial")
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(urlparse(requests[0].full_url).hostname, "api.openai.com")
+
+    def test_bad_provider_or_grant_returns_only_error_without_breaking_other_provider(self):
+        original = json.loads(json.dumps(self.data["providers"]["anthropic"]))
+        for broken in (None, {**original, "anchor": {}}, {**original, "grants": [None]},
+                       {**original, "grants": [{"amount": -1, "expires": "2026-12-09"}]},
+                       {**original, "grants": [{"amount": 1, "expires": "invalid"}]}):
+            with self.subTest(broken=broken):
+                self.data["providers"]["anthropic"] = broken
+                self.save_config()
+                code, body = self.request("GET", "/api/credits")
+                self.assertEqual(code, 200)
+                bad, good = json.loads(body)["providers"]
+                self.assertLess(len(bad["error"]), 40)
+                self.assertFalse(set(bad) & {"remaining", "granted", "spent_since_anchor", "extra", "stale_days"})
+                self.assertAlmostEqual(good["remaining"], 88.83)
+        self.data["providers"]["anthropic"] = original
+        self.data["providers"]["openai"]["grants"] = "broken"
+        self.save_config()
+        rows = self.providers()
+        self.assertAlmostEqual(rows["anthropic"]["remaining"], 197.4)
+        self.assertIn("error", rows["openai"])
+
+    def test_empty_or_invalid_config_is_http_200_with_config_error(self):
+        for content in ("", "malformed", "[]", "null", '{"providers": []}', '{}'):
+            with self.subTest(content=content):
+                self.config.write_text(content)
+                code, body = self.request("GET", "/api/credits")
+                self.assertEqual(code, 200)
+                self.assertEqual(json.loads(body), {"providers": [], "error": "config unreadable"})
 
 
 if __name__ == "__main__":

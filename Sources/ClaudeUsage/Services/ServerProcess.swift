@@ -3,7 +3,7 @@ import os
 
 @MainActor
 final class ServerProcess {
-    static let version = "3.0.1"
+    static let version = "3.1.0"
     private let logger = Logger(subsystem: "com.heng.claude-usage-widget", category: "Server")
     private var process: Process?
 

@@ -25,6 +25,7 @@ public struct Preferences {
     public var metric: BarMetric { BarMetric(rawValue: defaults.string(forKey: "barMetric") ?? "") ?? .max }
     public var numbers: Bool { defaults.object(forKey: "barNumbers") as? Bool ?? true }
     public var always: Bool { defaults.object(forKey: "menuBarAlways") as? Bool ?? true }
+    public var showAPICredits: Bool { defaults.object(forKey: "showAPICredits") as? Bool ?? true }
     public var twoWidgets: Bool { defaults.string(forKey: "widgetAccounts") == "primarySecondary" }
     public var shortNames: [String: String] { defaults.dictionary(forKey: "accountShortNames") as? [String: String] ?? [:] }
 
