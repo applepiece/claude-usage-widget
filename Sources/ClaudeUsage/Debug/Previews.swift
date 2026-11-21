@@ -1,21 +1,6 @@
 import Cocoa
 import UsageKit
 
-@MainActor
-func sampleCredits(now: Date = Date()) -> [CreditProvider] {
-    let anchor = UsageFormatting.iso.string(from: now)
-    return [
-        CreditProvider(id: "anthropic", label: "Claude API", remaining: 199.95, granted: 200,
-                       spentSinceAnchor: 0.05, anchorAt: anchor,
-                       nextExpiry: CreditExpiry(date: UsageFormatting.iso.string(from: now.addingTimeInterval(18 * 86400)), amount: 200),
-                       console: "https://platform.claude.com/settings/billing", extra: 9.07),
-        CreditProvider(id: "openai", label: "OpenAI API", remaining: 5.25, granted: 100,
-                       spentSinceAnchor: 94.75, spendSource: .costsAPI, anchorAt: anchor,
-                       nextExpiry: CreditExpiry(date: UsageFormatting.iso.string(from: now.addingTimeInterval(2 * 86400)), amount: 5.25),
-                       console: "https://platform.openai.com/settings/organization/billing/credit-grants"),
-    ]
-}
-
 // Development-only offscreen rendering. No window, panel, status item, app
 // launch callback, login registration or network request is created here.
 @MainActor
@@ -167,7 +152,7 @@ func renderPreview(kind: String, path: String, dark: Bool, signedOut: Bool, two:
         defaults.register(defaults: ["primaryAccount": "pho", "secondaryAccount": "codex-pro"])
         let delegate = AppDelegate(preferences: Preferences(defaults))
         delegate.accounts = signedOut ? [] : samples
-        delegate.model.creditSnapshot = CreditSnapshot(providers: sampleCredits(), updatedAt: Date())
+        delegate.model.creditSnapshot = CreditSnapshot(providers: CreditSamples.providers(), updatedAt: Date())
         delegate.model.lastUpdate = delegate.accounts.compactMap(MenuFormatting.timestamp).max()
         delegate.model.widgetVisible = true
         var menu = NSMenu()

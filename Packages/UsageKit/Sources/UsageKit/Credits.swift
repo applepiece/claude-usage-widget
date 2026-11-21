@@ -30,6 +30,7 @@ public struct CreditExpiry: Decodable, Sendable {
 
 public struct CreditProvider: Decodable, Sendable, Identifiable {
     public let id: String
+    public let type: String?
     public let label: String
     public let remaining: Double?
     public let granted: Double?
@@ -43,11 +44,12 @@ public struct CreditProvider: Decodable, Sendable, Identifiable {
     public let extra: Double?
     public let error: String?
 
-    public init(id: String, label: String, remaining: Double, granted: Double,
+    public init(id: String, type: String? = nil, label: String, remaining: Double, granted: Double,
                 spentSinceAnchor: Double = 0, spendSource: CreditSpendSource = .ledger,
                 anchorAt: String, nextExpiry: CreditExpiry? = nil, console: String,
                 staleDays: Int = 0, note: String? = nil, extra: Double? = nil, error: String? = nil) {
         self.id = id
+        self.type = type
         self.label = label
         self.remaining = remaining
         self.granted = granted
@@ -63,12 +65,44 @@ public struct CreditProvider: Decodable, Sendable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, label, remaining, granted, console, note, extra, error
+        case id, type, label, remaining, granted, console, note, extra, error
         case spentSinceAnchor = "spent_since_anchor"
         case spendSource = "spend_source"
         case anchorAt = "anchor_at"
         case nextExpiry = "next_expiry"
         case staleDays = "stale_days"
+    }
+
+    public var providerType: String { type ?? id }
+
+    public var glyphProvider: Provider? {
+        switch type {
+        case "anthropic": return .claude
+        case "openai": return .codex
+        default: return nil
+        }
+    }
+}
+
+/// Pure sample data shared by QA mode, menu previews and regression tests.
+public enum CreditSamples {
+    public static func providers(now: Date = Date()) -> [CreditProvider] {
+        let iso = ISO8601DateFormatter()
+        let anchor = iso.string(from: now)
+        let expiry = iso.string(from: now.addingTimeInterval(18 * 86400))
+        return [
+            CreditProvider(id: "anthropic", type: "anthropic", label: "Claude API · kkpk", remaining: 199.95, granted: 200,
+                           spentSinceAnchor: 0.05, anchorAt: anchor,
+                           nextExpiry: CreditExpiry(date: expiry, amount: 199.95),
+                           console: "https://platform.claude.com/settings/billing", extra: 9.07),
+            CreditProvider(id: "anthropic_pho", type: "anthropic", label: "Claude API · pho", remaining: 200, granted: 200,
+                           anchorAt: anchor, nextExpiry: CreditExpiry(date: expiry, amount: 200),
+                           console: "https://platform.claude.com/settings/billing", extra: 0),
+            CreditProvider(id: "openai", type: "openai", label: "OpenAI API", remaining: 5.25, granted: 100,
+                           spentSinceAnchor: 94.75, spendSource: .costsAPI, anchorAt: anchor,
+                           nextExpiry: CreditExpiry(date: iso.string(from: now.addingTimeInterval(2 * 86400)), amount: 5.25),
+                           console: "https://platform.openai.com/settings/organization/billing/credit-grants"),
+        ]
     }
 }
 

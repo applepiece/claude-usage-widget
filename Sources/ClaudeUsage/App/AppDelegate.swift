@@ -60,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
             }
             accounts = qa.accounts()
-            model.creditSnapshot = CreditSnapshot(providers: sampleCredits(), updatedAt: Date())
+            model.creditSnapshot = CreditSnapshot(providers: CreditSamples.providers(), updatedAt: Date())
             model.refreshing = qa.state == "refreshing"
         }
         model.widgetAction = { [weak self] visible in

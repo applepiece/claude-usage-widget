@@ -295,17 +295,26 @@ enum AccountMenuTitle {
         return NSAttributedString(attachment: attachment)
     }
 
-    static func providerGlyph(_ provider: Provider) -> NSImage {
+    static func providerGlyph(_ provider: Provider?) -> NSImage {
         // Drawn at display time so labelColor follows the menu, not the menu bar.
         NSImage(size: NSSize(width: 12, height: 12), flipped: false) { _ in
         if provider == .claude {
             drawClawdGlyph(in: NSRect(x: 0, y: 0, width: 12, height: 12), color: .labelColor)
-        } else {
+        } else if provider == .codex {
             let text = NSAttributedString(string: "›_", attributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .bold),
                 .foregroundColor: NSColor.labelColor,
             ])
             text.draw(at: NSPoint(x: (12 - text.size().width) / 2, y: (12 - text.size().height) / 2))
+        } else {
+            NSColor.labelColor.setStroke()
+            let card = NSBezierPath(roundedRect: NSRect(x: 1, y: 2, width: 10, height: 8), xRadius: 2, yRadius: 2)
+            card.lineWidth = 1
+            card.stroke()
+            let stripe = NSBezierPath()
+            stripe.move(to: NSPoint(x: 1, y: 7))
+            stripe.line(to: NSPoint(x: 11, y: 7))
+            stripe.stroke()
         }
             return true
         }
@@ -348,7 +357,7 @@ enum CreditMenuTitle {
         paragraph.baseWritingDirection = .leftToRight
         paragraph.lineBreakMode = .byClipping
         let text = NSMutableAttributedString(attributedString: AccountMenuTitle.attachment(
-            AccountMenuTitle.providerGlyph(provider.id == "anthropic" ? .claude : .codex), y: -2))
+            AccountMenuTitle.providerGlyph(provider.glyphProvider), y: -2))
         let label = AccountMenuTitle.fittedLabel(provider.label, width: max(0, AccountMenuTitle.weeklyTab - amountWidth - 28))
         text.append(NSAttributedString(string: " " + label, attributes: [.font: font, .foregroundColor: NSColor.labelColor]))
         text.append(NSAttributedString(string: "\t" + row.amount, attributes: [.font: numberFont, .foregroundColor: tint]))

@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, urlencode
 
-SERVER_VERSION = "3.1.0"
+SERVER_VERSION = "3.1.1"
 PORT = 8737
 SERVICE = "Claude Code-credentials"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -910,29 +910,29 @@ def credit_number(value):
     return value
 
 
-def credit_ledger_spend(anchors):
+def credit_ledger_spend(providers):
     """Unknown/corrupt records make the affected provider's sum a lower bound."""
     defaults = [Path.home() / "Dropbox/Macbook Pro/Happlen/agents/infra/fleet/api-credits/ledger",
                 Path.home() / ".local/state/api-credits/ledger"]
     override = os.environ.get("API_CREDITS_LEDGER_DIRS")
     directories = ([Path(p).expanduser() for p in override.split(os.pathsep) if p]
                    if override is not None else defaults)
-    totals = {provider: [] for provider in anchors}
+    totals = {provider: [] for provider in providers}
     partial = set()
     seen = set()
     for directory in directories:
         try:
             paths = sorted(directory.glob("*.jsonl"))
         except OSError:
-            partial.update(anchors)
+            partial.update(providers)
             continue
         for path in paths:
             try:
                 if path.stat().st_size == 0:
-                    partial.update(anchors)
+                    partial.update(providers)
                 with path.open(encoding="utf-8", errors="replace") as ledger:
                     for line in ledger:
-                        affected = anchors
+                        affected = providers
                         try:
                             entry = json.loads(line)
                             if not isinstance(entry, dict):
@@ -940,15 +940,22 @@ def credit_ledger_spend(anchors):
                             provider = entry.get("provider")
                             if not isinstance(provider, str):
                                 raise ValueError("invalid ledger provider")
-                            if provider not in anchors:
-                                continue
-                            affected = [provider]
                             if provider == "anthropic" and entry.get("tool") != "claude_api":
+                                continue
+                            affected = [identifier for identifier, binding in providers.items()
+                                        if binding["type"] == provider]
+                            if provider == "anthropic":
+                                account = entry.get("account", "anthropic")
+                                if not isinstance(account, str):
+                                    raise ValueError("invalid ledger account")
+                                affected = [identifier for identifier in affected
+                                            if providers[identifier]["ledger_account"] == account]
+                            if not affected:
                                 continue
                             if "id" in entry:
                                 if not isinstance(entry["id"], str) or not entry["id"]:
                                     raise ValueError("invalid ledger id")
-                                identity = ("id", entry["id"])
+                                identity = ("id", provider, entry.get("account"), entry["id"])
                             else:
                                 identity = ("line", line.strip())
                             at = credit_timestamp(entry["ts"])
@@ -956,12 +963,13 @@ def credit_ledger_spend(anchors):
                             if identity in seen:
                                 continue
                             seen.add(identity)
-                            if at > anchors[provider]:
-                                totals[provider].append(usd)
+                            for identifier in affected:
+                                if at > providers[identifier]["anchor_at"]:
+                                    totals[identifier].append(usd)
                         except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
                             partial.update(affected)
             except OSError:
-                partial.update(anchors)
+                partial.update(providers)
     return {provider: (math.fsum(costs), provider in partial) for provider, costs in totals.items()}
 
 
@@ -1018,7 +1026,7 @@ def openai_credit_spend(anchor):
     return spent
 
 
-def credit_grants(provider, data, anchor_at):
+def credit_grants(provider_type, data, anchor_at):
     """Build remaining-at-anchor buckets, preserving original grant amounts."""
     try:
         raw_grants = data["grants"]
@@ -1030,7 +1038,7 @@ def credit_grants(provider, data, anchor_at):
                   for grant in raw_grants]
     except (KeyError, ValueError, TypeError, OverflowError):
         raise CreditConfigError("invalid grant") from None
-    if provider == "anthropic":
+    if provider_type == "anthropic":
         try:
             promo = credit_number(data["anchor"]["promo_remaining"])
             extra = credit_number(data["anchor"].get("purchased_remaining", 0))
@@ -1049,10 +1057,10 @@ def credit_grants(provider, data, anchor_at):
     return sorted(grants, key=lambda grant: grant["at"]), extra
 
 
-def credit_provider(provider, data, anchor_at, grants, extra, ledger, now):
+def credit_provider(provider, provider_type, data, anchor_at, grants, extra, ledger, now):
     spent, partial = ledger
     source = "ledger_partial" if partial else "ledger"
-    if provider == "openai":
+    if provider_type == "openai":
         exact = openai_credit_spend(anchor_at)
         if exact is not None:
             spent, partial, source = exact, False, "costs_api"
@@ -1069,7 +1077,7 @@ def credit_provider(provider, data, anchor_at, grants, extra, ledger, now):
     if partial:
         note = (note + " " if note else "") + "Upper bound: ledger is incomplete or includes usage with unknown cost."
     row = {
-        "id": provider, "label": data["label"],
+        "id": provider, "type": provider_type, "label": data["label"],
         "remaining": math.fsum(grant["remaining"] for grant in live),
         "granted": math.fsum(grant["amount"] for grant in live),
         "spent_since_anchor": spent, "spend_source": source, "anchor_at": data["anchor"]["at"],
@@ -1096,35 +1104,40 @@ def fetch_credits():
     now = time.time()
     prepared = {}
     errors = {}
-    for provider in ("anthropic", "openai"):
-        if provider not in providers:
-            continue
+    for provider, data in providers.items():
         try:
-            data = providers[provider]
             if not isinstance(data.get("label"), str) or not isinstance(data.get("console"), str):
                 raise CreditConfigError("invalid provider")
+            provider_type = data.get("type", provider)
+            if provider_type not in ("anthropic", "openai"):
+                raise CreditConfigError("invalid type")
+            ledger_account = data.get("ledger_account", "anthropic")
+            if provider_type == "anthropic" and (not isinstance(ledger_account, str) or not ledger_account):
+                raise CreditConfigError("invalid ledger account")
             try:
                 anchor_at = credit_timestamp(data["anchor"]["at"])
             except (KeyError, ValueError, TypeError, OverflowError):
                 raise CreditConfigError("invalid anchor") from None
-            grants, extra = credit_grants(provider, data, anchor_at)
-            prepared[provider] = (anchor_at, grants, extra)
+            grants, extra = credit_grants(provider_type, data, anchor_at)
+            prepared[provider] = {"type": provider_type, "anchor_at": anchor_at,
+                                  "ledger_account": ledger_account, "grants": grants, "extra": extra}
         except Exception as error:
             errors[provider] = str(error) if isinstance(error, CreditConfigError) else "invalid provider"
-    ledger = credit_ledger_spend({provider: values[0] for provider, values in prepared.items()})
+    ledger = credit_ledger_spend(prepared)
     result = []
-    for provider in ("anthropic", "openai"):
-        if provider not in providers:
-            continue
-        data = providers[provider]
+    for provider, data in providers.items():
+        provider_type = data.get("type", provider) if isinstance(data, dict) else provider
         try:
             if provider in errors:
                 raise CreditConfigError(errors[provider])
-            anchor_at, grants, extra = prepared[provider]
-            row = credit_provider(provider, data, anchor_at, grants, extra, ledger[provider], now)
+            binding = prepared[provider]
+            row = credit_provider(provider, binding["type"], data, binding["anchor_at"],
+                                  binding["grants"], binding["extra"], ledger[provider], now)
         except Exception as error:
-            row = {"id": provider, "label": "Claude API" if provider == "anthropic" else "OpenAI API",
+            row = {"id": provider, "label": provider,
                    "error": str(error) if isinstance(error, CreditConfigError) else "invalid provider"}
+            if isinstance(provider_type, str) and provider_type in ("anthropic", "openai"):
+                row["type"] = provider_type
             if isinstance(data, dict):
                 for field in ("label", "console"):
                     if isinstance(data.get(field), str):

@@ -763,7 +763,7 @@ def send(value):
     print(json.dumps(value), flush=True)
 initialize = receive()
 assert initialize == {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-    "clientInfo": {"name": "claude-usage-widget", "version": "3.1.0"}}}
+    "clientInfo": {"name": "claude-usage-widget", "version": "3.1.1"}}}
 send({"method": "configWarning", "params": {}})
 send({"id": 1, "result": {}})
 assert receive() == {"jsonrpc": "2.0", "method": "initialized"}
@@ -855,7 +855,7 @@ sys.stdin.read()
         with patch.object(server, "fetch_usage", return_value=usage), patch.object(server, "fetch_account", return_value={"logged_in": False}):
             self.assertEqual(json.loads(self.request("GET", "/api/usage")[1]), usage)
             self.assertEqual(json.loads(self.request("GET", "/api/account")[1]), {"logged_in": False})
-        self.assertEqual(self.request("GET", "/api/ping"), (200, b'{"ok":true,"version":"3.1.0"}'))
+        self.assertEqual(self.request("GET", "/api/ping"), (200, b'{"ok":true,"version":"3.1.1"}'))
         for path in ("/", "/index.html"):
             code, body = self.request("GET", path)
             self.assertEqual(code, 200)
@@ -995,6 +995,8 @@ class CreditsTests(unittest.TestCase):
         self.assertEqual(claude["granted"], 200)
         self.assertEqual(claude["extra"], 9.07)
         self.assertEqual(claude["spend_source"], "ledger_partial")
+        self.assertEqual(claude["type"], "anthropic")
+        self.assertEqual(openai["type"], "openai")
         self.assertEqual(claude["anchor_at"], self.anchor)
         self.assertEqual(claude["stale_days"], 4)
         self.assertEqual(claude["console"], "https://example.com/claude")
@@ -1287,6 +1289,197 @@ class CreditsTests(unittest.TestCase):
                 code, body = self.request("GET", "/api/credits")
                 self.assertEqual(code, 200)
                 self.assertEqual(json.loads(body), {"providers": [], "error": "config unreadable"})
+
+    def add_claude_organization(self):
+        original = self.data["providers"]["anthropic"]
+        original["label"] = "Claude API · kkpk"
+        second = json.loads(json.dumps(original))
+        second.update(type="anthropic", ledger_account="anthropic-pho", label="Claude API · pho")
+        second["anchor"].update(promo_remaining=200, purchased_remaining=1.5)
+        self.data["providers"] = {"anthropic": original, "anthropic_pho": second,
+                                  "openai": self.data["providers"]["openai"]}
+        self.save_config()
+
+    def account_entry(self, account, usd, ts="2026-11-21T01:00:00Z", tool="claude_api"):
+        entry = json.loads(self.entry("anthropic", usd, ts))
+        entry.update(account=account, tool=tool)
+        return json.dumps(entry)
+
+    def test_multiple_claude_orgs_route_explicit_and_legacy_accounts_independently(self):
+        self.clean_ledgers()
+        self.add_claude_organization()
+        pho = self.account_entry("anthropic-pho", 3)
+        self.write_ledger([self.entry("anthropic", 2), self.account_entry("anthropic", 1.25), pho,
+                           self.account_entry("anthropic-pho", 50, ts="2026-11-19T00:00:00Z"),
+                           self.account_entry("anthropic-pho", 90, tool="agent_sdk"),
+                           self.account_entry("unconfigured-org", 7), self.entry("openai", 1.5)])
+        (self.dirs[1] / "replica.jsonl").write_text(pho + "\n")
+        code, body = self.request("GET", "/api/credits")
+        self.assertEqual(code, 200)
+        rows = json.loads(body)["providers"]
+        self.assertEqual([row["id"] for row in rows], ["anthropic", "anthropic_pho", "openai"])
+        self.assertEqual([row["type"] for row in rows], ["anthropic", "anthropic", "openai"])
+        self.assertEqual([row["label"] for row in rows], ["Claude API · kkpk", "Claude API · pho", "OpenAI API"])
+        self.assertEqual([row["spent_since_anchor"] for row in rows], [3.25, 3, 1.5])
+        for row, expected in zip(rows, (196.7, 197, 88.58)):
+            self.assertAlmostEqual(row["remaining"], expected)
+            self.assertEqual(row["spend_source"], "ledger")
+            self.assertAlmostEqual(row["next_expiry"]["amount"], expected if row["type"] == "anthropic" else 27.17)
+        self.assertEqual(rows[0]["extra"], 9.07)
+        self.assertEqual(rows[1]["extra"], 1.5)
+        self.urlopen.assert_not_called()
+
+    def test_provider_config_order_is_preserved_including_error_rows(self):
+        self.add_claude_organization()
+        providers = self.data["providers"]
+        self.data["providers"] = {key: providers[key] for key in ("openai", "anthropic_pho", "anthropic")}
+        self.data["providers"]["anthropic_pho"]["grants"] = "invalid"
+        self.save_config()
+        rows = server.fetch_credits()["providers"]
+        self.assertEqual([row["id"] for row in rows], ["openai", "anthropic_pho", "anthropic"])
+        self.assertEqual(rows[1]["type"], "anthropic")
+        self.assertEqual(rows[1]["label"], "Claude API · pho")
+        self.assertEqual(rows[1]["error"], "invalid grant")
+        self.assertNotIn("remaining", rows[1])
+        self.assertIn("remaining", rows[0])
+        self.assertIn("remaining", rows[2])
+
+    def test_any_provider_id_uses_explicit_type_for_grants_and_ledger_matching(self):
+        self.clean_ledgers()
+        anthropic, openai = self.data["providers"].values()
+        self.data["providers"] = {"org A / promo": {**anthropic, "type": "anthropic"},
+                                  "api-budget": {**openai, "type": "openai"}}
+        self.save_config()
+        self.write_ledger([self.entry("anthropic", 2), self.entry("openai", 3)])
+        rows = self.providers()
+        self.assertEqual(list(rows), ["org A / promo", "api-budget"])
+        self.assertEqual(rows["org A / promo"]["type"], "anthropic")
+        self.assertAlmostEqual(rows["org A / promo"]["remaining"], 197.95)
+        self.assertEqual(rows["api-budget"]["type"], "openai")
+        self.assertAlmostEqual(rows["api-budget"]["remaining"], 87.08)
+        self.assertEqual(rows["api-budget"]["spend_source"], "ledger")
+
+    def test_custom_openai_id_still_prefers_costs_api_and_falls_back_to_ledger(self):
+        openai = self.data["providers"].pop("openai")
+        self.data["providers"]["api-budget"] = {**openai, "type": "openai"}
+        self.save_config()
+        self.key.write_text("fixture-admin-key")
+        self.urlopen.side_effect = lambda *args, **kwargs: Response(self.cost_page(2))
+        row = self.providers()["api-budget"]
+        self.assertEqual(row["spend_source"], "costs_api")
+        self.assertEqual(row["spent_since_anchor"], 2)
+        self.assertAlmostEqual(row["remaining"], 88.08)
+        self.clock.return_value += server.COSTS_CACHE_SECONDS
+        self.urlopen.side_effect = URLError("fixture failure")
+        row = self.providers()["api-budget"]
+        self.assertEqual(row["spend_source"], "ledger_partial")
+        self.assertEqual(row["spent_since_anchor"], 1.25)
+        self.assertAlmostEqual(row["remaining"], 88.83)
+
+    def test_default_ledger_account_and_each_provider_anchor_apply_with_shared_account(self):
+        self.clean_ledgers()
+        self.add_claude_organization()
+        second = self.data["providers"]["anthropic_pho"]
+        second.pop("ledger_account")
+        second["anchor"]["at"] = "2026-11-21T00:00:00Z"
+        self.save_config()
+        self.write_ledger([self.entry("anthropic", 5, "2026-11-20T12:00:00Z"),
+                           self.account_entry("anthropic", 2), self.account_entry("anthropic-pho", 9)])
+        rows = self.providers()
+        self.assertEqual(rows["anthropic"]["spent_since_anchor"], 7)
+        self.assertEqual(rows["anthropic_pho"]["spent_since_anchor"], 2)
+        self.assertEqual(rows["anthropic_pho"]["remaining"], 198)
+
+    def test_partial_ledger_cost_marks_only_matching_claude_account(self):
+        self.clean_ledgers()
+        self.add_claude_organization()
+        self.write_ledger([self.account_entry("anthropic-pho", None), self.entry("anthropic", 2)])
+        rows = self.providers()
+        self.assertEqual(rows["anthropic_pho"]["spend_source"], "ledger_partial")
+        self.assertEqual(rows["anthropic"]["spend_source"], "ledger")
+        self.assertEqual(rows["openai"]["spend_source"], "ledger")
+        self.write_ledger([self.account_entry(None, 1)])
+        rows = self.providers()
+        self.assertEqual(rows["anthropic"]["spend_source"], "ledger_partial")
+        self.assertEqual(rows["anthropic_pho"]["spend_source"], "ledger_partial")
+        self.assertEqual(rows["openai"]["spend_source"], "ledger")
+
+    def test_custom_claude_provider_expiry_keeps_purchased_extra(self):
+        self.add_claude_organization()
+        self.clock.return_value = server.credit_timestamp("2026-12-10")
+        row = self.providers()["anthropic_pho"]
+        self.assertEqual((row["remaining"], row["granted"], row["next_expiry"]), (0, 0, None))
+        self.assertEqual(row["extra"], 1.5)
+
+    def test_invalid_type_or_account_is_isolated_to_its_provider(self):
+        self.add_claude_organization()
+        original = json.loads(json.dumps(self.data["providers"]["anthropic_pho"]))
+        for fields, reason, expected_type in (({"type": "unsupported"}, "invalid type", None),
+                                              ({"type": []}, "invalid type", None),
+                                              ({"type": None}, "invalid type", None),
+                                              ({"type": 17}, "invalid type", None),
+                                              ({"type": True}, "invalid type", None),
+                                              ({"type": "unsupported", "label": ""}, "invalid type", None),
+                                              ({"ledger_account": None}, "invalid ledger account", "anthropic"),
+                                              ({"ledger_account": ""}, "invalid ledger account", "anthropic"),
+                                              ({"label": 17}, "invalid provider", "anthropic"),
+                                              ({"label": None}, "invalid provider", "anthropic")):
+            with self.subTest(fields=fields):
+                second = {**original, **fields}
+                self.data["providers"]["anthropic_pho"] = second
+                self.save_config()
+                rows = self.providers()
+                expected = {"id": "anthropic_pho", "console": original["console"], "error": reason,
+                            "label": second["label"] if isinstance(second["label"], str) else "anthropic_pho"}
+                if expected_type is not None:
+                    expected["type"] = expected_type
+                self.assertEqual(rows["anthropic_pho"], expected)
+                self.assertAlmostEqual(rows["anthropic"]["remaining"], 197.4)
+                self.assertAlmostEqual(rows["openai"]["remaining"], 88.83)
+
+    def test_unknown_id_without_type_omits_type_and_keeps_configured_label(self):
+        self.add_claude_organization()
+        second = self.data["providers"]["anthropic_pho"]
+        second.pop("type")
+        self.save_config()
+        self.assertEqual(self.providers()["anthropic_pho"], {
+            "id": "anthropic_pho", "label": "Claude API · pho", "console": second["console"],
+            "error": "invalid type"})
+
+    def test_invalid_explicit_type_never_falls_back_to_a_known_provider_id(self):
+        for provider in ("anthropic", "openai"):
+            data = self.data["providers"][provider]
+            data["type"] = None
+            self.save_config()
+            with self.subTest(provider=provider):
+                self.assertEqual(self.providers()[provider], {
+                    "id": provider, "label": data["label"], "console": data["console"],
+                    "error": "invalid type"})
+            data.pop("type")
+
+    def test_error_label_without_configured_string_uses_id(self):
+        self.data["providers"]["anthropic"] = None
+        self.save_config()
+        self.assertEqual(self.providers()["anthropic"], {
+            "id": "anthropic", "type": "anthropic", "label": "anthropic", "error": "invalid provider"})
+
+    def test_ledger_ids_are_scoped_by_provider_and_account_and_deduplicated_across_dirs(self):
+        self.clean_ledgers()
+        self.add_claude_organization()
+        entries = [json.loads(self.account_entry("anthropic", 2)),
+                   json.loads(self.account_entry("anthropic-pho", 3)),
+                   {**json.loads(self.entry("openai", 1.5)), "account": "anthropic"}]
+        for entry in entries:
+            entry["id"] = "shared-fixture-id"
+        self.write_ledger([json.dumps(entry) for entry in entries])
+        (self.dirs[1] / "replica.jsonl").write_text("\n".join(
+            json.dumps(entry, sort_keys=True, separators=(",", ":")) for entry in entries) + "\n")
+        rows = self.providers()
+        self.assertEqual([row["spent_since_anchor"] for row in rows.values()], [2, 3, 1.5])
+        self.assertAlmostEqual(rows["anthropic"]["remaining"], 197.95)
+        self.assertEqual(rows["anthropic_pho"]["remaining"], 197)
+        self.assertAlmostEqual(rows["openai"]["remaining"], 88.58)
+        self.assertEqual([row["spend_source"] for row in rows.values()], ["ledger"] * 3)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ struct CreditTests {
         #expect(response.providers[1].spendSource == .costsAPI)
         #expect(response.providers[1].nextExpiry == nil)
         #expect(response.providers[1].extra == nil)
+        #expect(response.providers.map(\.providerType) == ["anthropic", "openai"])
         #expect(response.updatedAt == 1795236600)
         let missing = try JSONDecoder().decode(CreditsResponse.self, from: Data(#"{"providers":[]}"#.utf8))
         #expect(missing.providers.isEmpty && missing.updatedAt == nil)
@@ -165,5 +166,63 @@ struct CreditTests {
         #expect(!row.showsMeter && !row.warning)
         #expect(!row.detail.contains("$"))
         #expect(response.providers[1].remaining == 90.08)
+    }
+
+    @Test func multipleOrganizationsDecodeTypesAndLabelsInResponseOrder() throws {
+        let response = try JSONDecoder().decode(CreditsResponse.self, from: Data("""
+        {"providers":[
+        {"id":"anthropic","type":"anthropic","label":"Claude API · kkpk","remaining":199.95,"granted":200},
+        {"id":"anthropic_pho","type":"anthropic","label":"Claude API · pho","remaining":200,"granted":200},
+        {"id":"openai","type":"openai","label":"OpenAI API","remaining":90.08,"granted":111}]}
+        """.utf8))
+        #expect(response.providers.map(\.id) == ["anthropic", "anthropic_pho", "openai"])
+        #expect(response.providers.map(\.providerType) == ["anthropic", "anthropic", "openai"])
+        #expect(response.providers.map(\.label) == ["Claude API · kkpk", "Claude API · pho", "OpenAI API"])
+        #expect(response.providers[1].type == "anthropic")
+        let now = Date()
+        let rows = response.providers.map { CreditRowPresentation($0, updatedAt: now, now: now) }
+        #expect(rows[0].detail.hasPrefix("Claude API · kkpk · $199.95 left"))
+        #expect(rows[1].detail.hasPrefix("Claude API · pho · $200.00 left"))
+    }
+
+    @Test func explicitTypeOverridesIdentifierAndLegacyResponsesRemainCompatible() throws {
+        let explicit = try JSONDecoder().decode(CreditProvider.self, from: Data(
+            #"{"id":"anthropic","type":"openai","label":"Custom API"}"#.utf8))
+        #expect(explicit.providerType == "openai")
+        #expect(explicit.glyphProvider == .codex)
+        let legacy = try JSONDecoder().decode(CreditProvider.self, from: Data(
+            #"{"id":"anthropic","label":"Claude API"}"#.utf8))
+        #expect(legacy.type == nil && legacy.providerType == "anthropic")
+        #expect(legacy.glyphProvider == nil)
+        let custom = CreditProvider(id: "org A / promo", type: "anthropic", label: "Custom Claude",
+                                    remaining: 200, granted: 200, anchorAt: "2026-11-21T00:00:00Z",
+                                    console: "https://example.com")
+        #expect(custom.providerType == "anthropic")
+        #expect(custom.glyphProvider == .claude)
+    }
+
+    @Test func qaSamplesIncludeTwoClaudeOrganizationsAndOpenAI() {
+        let now = Date(timeIntervalSince1970: 1_795_219_200)
+        let providers = CreditSamples.providers(now: now)
+        #expect(providers.count == 3)
+        #expect(providers.map(\.id) == ["anthropic", "anthropic_pho", "openai"])
+        #expect(providers.map(\.providerType) == ["anthropic", "anthropic", "openai"])
+        #expect(providers.map(\.glyphProvider) == [.claude, .claude, .codex])
+        #expect(providers.map(\.label) == ["Claude API · kkpk", "Claude API · pho", "OpenAI API"])
+        let rows = providers.map { CreditRowPresentation($0, updatedAt: now, now: now) }
+        #expect(rows.map(\.warning) == [false, false, true])
+        #expect(rows.allSatisfy { $0.showsMeter })
+    }
+
+    @Test func absentOrUnknownTypeChoosesNeutralGlyphRegardlessOfIdentifier() throws {
+        for id in ["anthropic", "openai", "anthropic_pho", "unknown"] {
+            for type in [nil, "unsupported"] as [String?] {
+                var fields = ["id": id, "label": id, "error": "invalid type"]
+                fields["type"] = type
+                let provider = try JSONDecoder().decode(CreditProvider.self, from: JSONSerialization.data(withJSONObject: fields))
+                #expect(provider.glyphProvider == nil)
+                #expect(provider.type == type)
+            }
+        }
     }
 }
