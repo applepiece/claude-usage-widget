@@ -34,7 +34,7 @@ for appearance in light dark; do
     for state in normal stale rejected signedout single error limits refreshing; do
         capture "menu-$state-$appearance" --qa-state "$state" --qa-appearance "$appearance" --qa-open menu --qa-defaults secondaryAccount=codex-pro
     done
-    for tab in general menubar accounts about; do
+    for tab in general menubar layout accounts about; do
         capture "settings-$tab-$appearance" --qa-appearance "$appearance" --qa-open "settings-$tab" --qa-defaults secondaryAccount=codex-pro
     done
     capture "accounts-renewal-$appearance" --qa-state rejected --qa-appearance "$appearance" --qa-open settings-accounts
@@ -42,5 +42,13 @@ for appearance in light dark; do
     capture "accounts-short-names-$appearance" --qa-appearance "$appearance" --qa-open settings-accounts --qa-defaults 'accountShortNames={"pho":"pho","kkpk":"pho","codex-pro":"›PRO","mahidol":"กิขีคุฆูง่จ้"}'
     capture "menubar-icon-only-$appearance" --qa-appearance "$appearance" --qa-open settings-menubar --qa-defaults barNumbers=false
     capture "menu-codex-$appearance" --qa-appearance "$appearance" --qa-open menu --qa-defaults primaryAccount=codex-pro --qa-defaults secondaryAccount=pho
+    capture "menu-bars-weekly-fable-$appearance" --qa-appearance "$appearance" --qa-open menu --qa-defaults barSlots=weekly,weekly:Fable
+    capture "menu-bars-three-$appearance" --qa-appearance "$appearance" --qa-open menu --qa-defaults barSlots=weekly,weekly:Fable,session
+    capture "menu-bars-one-$appearance" --qa-appearance "$appearance" --qa-open menu --qa-defaults barSlots=weekly:Fable
+    for mode in providers total off; do
+        capture "credits-$mode-$appearance" --qa-appearance "$appearance" --qa-open menu --qa-defaults "creditsDisplay=$mode"
+        capture "credits-settings-$mode-$appearance" --qa-appearance "$appearance" --qa-open settings-layout --qa-defaults "creditsDisplay=$mode"
+    done
+    capture "credits-warn-14-$appearance" --qa-appearance "$appearance" --qa-open settings-layout --qa-defaults creditsWarnDays=14
     capture "accounts-signedout-$appearance" --qa-state signedout --qa-appearance "$appearance" --qa-open settings-accounts
  done

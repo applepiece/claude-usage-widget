@@ -4,26 +4,33 @@ import UsageKit
 // Development-only offscreen rendering. No window, panel, status item, app
 // launch callback, login registration or network request is created here.
 @MainActor
-func sampleAccounts() -> [UsageAccount] {
-    func limit(_ value: Double, hours: Double) -> LimitInfo {
-        LimitInfo(utilization: value, resetsAt: UsageFormatting.iso.string(from: Date().addingTimeInterval(hours * 3600)))
+func sampleAccounts(now: Date = Date()) -> [UsageAccount] {
+    func limit(_ value: Double, hours: Double, kind: String? = nil, model: String? = nil) -> LimitInfo {
+        LimitInfo(utilization: value, resetsAt: UsageFormatting.iso.string(from: now.addingTimeInterval(hours * 3600)),
+                  kind: kind, scope: model.map { LimitScope(model: LimitModel(displayName: $0)) })
     }
     return [
         UsageAccount(id: "pho", label: "pho", email: "kriengkrai.pho@gmail.com", plan: "max",
                      source: "keychain", machineLogin: true, fiveHour: limit(15, hours: 3),
-                     sevenDay: limit(82, hours: 96), fetchedAt: Date().timeIntervalSince1970, provider: .claude),
+                     sevenDay: limit(82, hours: 96), limits: [
+                        limit(15, hours: 3, kind: "session"),
+                        limit(82, hours: 96, kind: "weekly_all"),
+                        limit(41, hours: 96, kind: "weekly_scoped", model: "Fable"),
+                        limit(63, hours: 96, kind: "weekly_scoped", model: "Opus"),
+                        LimitInfo(kind: "extra_usage", percent: 12),
+                     ], fetchedAt: now.timeIntervalSince1970, provider: .claude),
         UsageAccount(id: "kkpk", label: "kkpk", email: "kkpk@example.com", plan: "max",
                      fiveHour: limit(0, hours: 5), sevenDay: limit(37, hours: 120),
-                     fetchedAt: Date().timeIntervalSince1970, provider: .claude),
+                     fetchedAt: now.timeIntervalSince1970, provider: .claude),
         UsageAccount(id: "mahidol", label: "mahidol", email: "mahidol@example.com", plan: "team",
-                     fiveHour: limit(4, hours: 4), fetchedAt: Date().timeIntervalSince1970, provider: .claude),
+                     fiveHour: limit(4, hours: 4), fetchedAt: now.timeIntervalSince1970, provider: .claude),
         UsageAccount(id: "codex-pro", label: "pro", email: "pro@example.com", plan: "pro lite",
-                     source: "codex", sevenDay: limit(12, hours: 96), fetchedAt: Date().timeIntervalSince1970,
-                     provider: .codex, asOf: Date().timeIntervalSince1970 - 120, quotaSource: "live"),
+                     source: "codex", sevenDay: limit(12, hours: 96), fetchedAt: now.timeIntervalSince1970,
+                     provider: .codex, asOf: now.timeIntervalSince1970 - 120, quotaSource: "live"),
         UsageAccount(id: "codex-edu", label: "edu", email: "edu@example.com", plan: "edu",
                      source: "codex", fiveHour: limit(1, hours: 4), sevenDay: limit(0, hours: 168),
-                     fetchedAt: Date().timeIntervalSince1970, provider: .codex,
-                     asOf: Date().timeIntervalSince1970, quotaSource: "live"),
+                     fetchedAt: now.timeIntervalSince1970, provider: .codex,
+                     asOf: now.timeIntervalSince1970, quotaSource: "live"),
     ]
 }
 
@@ -70,6 +77,10 @@ private final class MenuPreviewRow: NSView {
         } else if item.state == .mixed {
             item.mixedStateImage?.draw(in: NSRect(x: 6, y: 6, width: 12, height: 12))
         }
+        if item.submenu != nil {
+            NSAttributedString(string: "›", attributes: attributes)
+                .draw(at: NSPoint(x: bounds.width - 14, y: 4))
+        }
         if !item.keyEquivalent.isEmpty {
             let key = NSAttributedString(string: "⌘" + item.keyEquivalent.uppercased(), attributes: attributes)
             key.draw(at: NSPoint(x: bounds.width - 14 - key.size().width, y: 4))
@@ -110,7 +121,8 @@ func renderPreview(kind: String, path: String, dark: Bool, signedOut: Bool, two:
     NSApp.setActivationPolicy(.prohibited)
     registerPixelFont()
     guard let appearance = NSAppearance(named: dark ? .darkAqua : .aqua) else { return 1 }
-    let samples = sampleAccounts()
+    guard let previewNow = parseISO("2026-11-20T03:00:00Z") else { return 1 }
+    let samples = sampleAccounts(now: previewNow)
     let canvas: PreviewCanvas
     switch kind {
     case "--preview-statusbar":
@@ -131,18 +143,22 @@ func renderPreview(kind: String, path: String, dark: Bool, signedOut: Bool, two:
             accounts: [samples[0]], shortNames: ["pho": "กิขีคุฆูง่จ้"])))
         canvas.statusRows.append(("percentage off", StatusTitle(accounts: samples, numbers: false)))
     case "--preview-widget":
-        canvas = PreviewCanvas(frame: NSRect(x: 0, y: 0, width: 216, height: two ? 148 : 74))
+        let slots = UsageMetric.defaultSlots
+        let rowHeight = CGFloat(UsageBarLayout.widgetHeight(count: slots.count))
+        canvas = PreviewCanvas(frame: NSRect(x: 0, y: 0, width: 216, height: rowHeight * (two ? 2 : 1)))
         canvas.transparent = true
         let shownSamples: [UsageAccount] = two ? [samples[0], samples[3]] : [samples[0]]
         for (index, account) in shownSamples.enumerated() {
-            let widget = WidgetView(frame: NSRect(x: 0, y: canvas.bounds.height - CGFloat(index + 1) * 74,
-                                                  width: 216, height: 74))
+            let widget = WidgetView(frame: NSRect(x: 0, y: canvas.bounds.height - CGFloat(index + 1) * rowHeight,
+                                                  width: 216, height: rowHeight))
             widget.accountTag = two ? (accountTags(samples)[account.id] ?? "") : ""
             widget.showsMascot = index == 0
             widget.nightOverride = false
             widget.offline = false
-            widget.five = account.fiveHour?.value.map { ($0, "14:00") }
-            widget.seven = account.sevenDay?.value.map { ($0, "FRI 14:00") }
+            widget.configureBars(account: account, slots: slots)
+            widget.bars = widget.bars.map { bar in
+                (bar.metric, bar.data.map { ($0.pct, bar.metric == .session ? "14:00" : "FRI 14:00") })
+            }
             canvas.addSubview(widget)
         }
     case "--preview-menu":
@@ -152,13 +168,13 @@ func renderPreview(kind: String, path: String, dark: Bool, signedOut: Bool, two:
         defaults.register(defaults: ["primaryAccount": "pho", "secondaryAccount": "codex-pro"])
         let delegate = AppDelegate(preferences: Preferences(defaults))
         delegate.accounts = signedOut ? [] : samples
-        delegate.model.creditSnapshot = CreditSnapshot(providers: CreditSamples.providers(), updatedAt: Date())
+        delegate.model.creditSnapshot = CreditSnapshot(providers: CreditSamples.providers(now: previewNow), updatedAt: previewNow)
         delegate.model.lastUpdate = delegate.accounts.compactMap(MenuFormatting.timestamp).max()
         delegate.model.widgetVisible = true
         var menu = NSMenu()
         // Resolve attachment colors in the requested preview appearance.
-        appearance.performAsCurrentDrawingAppearance { menu = delegate.buildMenu() }
-        let items = menu.items.filter { !$0.isAlternate }
+        appearance.performAsCurrentDrawingAppearance { menu = delegate.buildMenu(now: previewNow) }
+        let items = menu.items.filter { !$0.isAlternate && !$0.isHidden }
         let heights: [CGFloat] = items.map {
             $0.view?.frame.height ?? ($0.isSeparatorItem ? 10 : max(24, ceil($0.attributedTitle?.size().height ?? 16) + 8))
         }

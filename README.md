@@ -79,7 +79,8 @@ purple means Weekly, and red marks usage at 90% or higher. Stale and failed
 states still appear on the card.
 
 With multiple accounts, each gets one native menu row: provider glyph, account
-label, and aligned Session and Weekly mini meters with numbers. Claude accounts
+label, and aligned mini meters with numbers in the selected bar order. A caption
+labels the columns; the default is Session then Weekly. Claude accounts
 come first, then Codex. Missing windows show **–**; failed accounts show
 **⚠︎ expired** or **⚠︎ error**. Hover for the full plan, usage and reset details.
 The primary has a checkmark and the secondary has a circled 2. Click to make an
@@ -89,14 +90,26 @@ The list is omitted with a single account. The remaining actions are
 and **Quit (⌘Q)**. Refresh has no subtitle and is disabled as **Refreshing…**
 while a refresh is running.
 
-Settings has four tabs:
+Settings has five tabs:
 
 | Tab | Controls |
 | --- | --- |
 | General | Launch at login, off until enabled by the user; desktop widget options. |
 | Menu Bar | Live preview; accounts shown; value; Show percentage; Keep icon in the menu bar. |
+| Layout | Add, remove, and reorder usage bars; API credits display and expiry warnings. |
 | Accounts | Primary and secondary accounts; editable short names; status and renewal commands; this Mac's Claude Code sign in, switch account and sign out; provider usage page links. |
 | About | Version and credits. |
+
+### Usage bars and Layout
+
+In **Settings > Layout**, choose one to three bars, remove them with minus, and
+use the arrows to change their order. The account menu columns and desktop
+widget update together. Session (orange) and Weekly (purple) are the defaults;
+per-model Weekly bars such as Fable use teal, and Extra usage uses green.
+Per-model data comes from the account signed in to Claude Code on this Mac.
+Other accounts show **–** when the selected metric is unavailable. Widget height
+adjusts for the bar count, including when primary and secondary are stacked.
+Status-item text options stay in **Menu Bar**; API credits controls are in **Layout**.
 
 The primary account initially uses this Mac's login, otherwise the first
 available account. Secondary starts at None and cannot equal primary. Choosing
@@ -135,10 +148,11 @@ Bridge token files remain unchanged. Old `barMode` preferences migrate once:
 Off becomes Claw'd alone; 5-Hour/Weekly/Both becomes the
 corresponding value selection.
 
-The **API credits** section below the account rows shows prepaid balances, a thin
-remaining-credit meter and the amount of the next expiring grant. Click a provider to open its
-billing console. Hide it with **Settings > Menu Bar > Show API credits** (on by
-default). The app refreshes credits with usage and checks again when opening a
+The **API credits** section below the account rows shows prepaid balances with
+aligned remaining-credit meters and amounts. Open a provider submenu for grant,
+spend and expiry details and its billing console. **Settings > Layout > API credits**
+offers **Each provider**, **Total only**, or **Off**, plus a 3/7/14-day expiry
+warning window. The app refreshes credits with usage and checks again when opening a
 menu whose credit snapshot is more than ten minutes old; failures keep the last
 snapshot, marked overdue after thirty minutes without a successful fetch.
 Anchors at least seven days old show their date. No live grants means no meter
@@ -453,7 +467,7 @@ usage endpoint ก่อนและ probe เมื่อจำเป็น ไ
 ตามด้วย **Show Widget**, **Refresh (⌘R)** แบบไม่มีข้อความรอง,
 **Settings… (⌘,)** และ **Quit (⌘Q)** สถานะ stale และข้อผิดพลาดยังแสดงบนการ์ด
 
-Settings แบ่งเป็น 4 แท็บ:
+Settings แบ่งเป็น 5 แท็บ:
 
 - **General**: เปิดตอน login macOS เมื่อผู้ใช้เลือกเองเท่านั้น ค่าเริ่มต้นปิด
   พร้อมตัวเลือก desktop widget และแสดงบัญชีหลักหรือบัญชีหลักพร้อมบัญชีรอง
@@ -461,6 +475,7 @@ Settings แบ่งเป็น 4 แท็บ:
   เลือก Show เป็น Primary account / Primary and secondary / All accounts
   และ Value เป็น Most used (ค่าเริ่มต้น เลือกค่าสูงสุด) / Session / Weekly /
   Session and weekly มี Show percentage และ Keep icon in the menu bar
+- **Layout**: เลือกและเรียงแถบ usage 1–3 แถบสำหรับเมนูและ widget พร้อมตั้งค่า API credits
 - **Accounts**: เลือกบัญชีหลักและรอง ดูสถานะ คำสั่งต่ออายุ และลิงก์ usage
   ตั้ง Short name ได้โดยพิมพ์หรือเลือกจากเมนูลูกศร จำกัด 6 ตัวอักษร รองรับไทยและ emoji
   เว้นว่างเพื่อใช้ชื่อย่ออัตโนมัติ ชื่อซ้ำมีข้อความสีส้ม Same as ตามด้วยชื่อบัญชี

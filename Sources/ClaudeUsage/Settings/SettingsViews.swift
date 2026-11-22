@@ -13,6 +13,7 @@ struct SettingsContent: View {
             switch tab {
             case .general: GeneralSettings(model: model)
             case .menuBar: MenuBarSettings(model: model)
+            case .layout: LayoutSettings(model: model)
             case .accounts: AccountsSettings(model: model)
             case .about: AboutSettings()
             }
@@ -84,7 +85,6 @@ private struct MenuBarSettings: View {
     @AppStorage("barMetric") private var metric = "max"
     @AppStorage("barNumbers") private var numbers = true
     @AppStorage("menuBarAlways") private var always = true
-    @AppStorage("showAPICredits") private var showAPICredits = true
 
     private var appearance: NSAppearance { NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua) ?? NSApp.effectiveAppearance }
     private var shownAccounts: [UsageAccount] {
@@ -122,12 +122,98 @@ private struct MenuBarSettings: View {
                     Text("Off shows Claw'd alone.").font(.caption).foregroundStyle(.secondary)
                 }
                 Toggle("Keep icon in the menu bar", isOn: $always)
-                Toggle("Show API credits", isOn: $showAPICredits)
             } footer: {
                 Text("When off, the icon appears only while the widget is tucked away.").measureSettingsSection()
             }.measureSettingsSection()
         }
         .formStyle(.grouped)
+    }
+}
+
+@MainActor
+private struct LayoutSettings: View {
+    let model: AppModel
+    @AppStorage("creditsDisplay") private var creditsDisplay = CreditsDisplay.providers.rawValue
+    @AppStorage("creditsWarnDays") private var creditsWarnDays = 7
+
+    private var slots: [UsageMetric] { model.barSlots }
+    private var available: [UsageMetric] { UsageMetric.available(in: model.accounts).filter { !slots.contains($0) } }
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(Array(slots.enumerated()), id: \.element) { index, metric in
+                    metricRow(metric) {
+                        Button { model.moveBar(from: index, to: index - 1) } label: {
+                            Image(systemName: "chevron.up")
+                        }.disabled(index == 0)
+                            .accessibilityLabel(Text(String(localized: "Move \(metric.title) up")))
+                        Button { model.moveBar(from: index, to: index + 1) } label: {
+                            Image(systemName: "chevron.down")
+                        }.disabled(index == slots.count - 1)
+                            .accessibilityLabel(Text(String(localized: "Move \(metric.title) down")))
+                        Button { model.removeBar(at: index) } label: {
+                            Image(systemName: "minus.circle.fill").foregroundStyle(.red)
+                        }.disabled(slots.count == 1)
+                            .accessibilityLabel(Text(String(localized: "Remove \(metric.title)")))
+                    }
+                }
+            } header: {
+                Text(String(localized: "Bars · \(slots.count) of 3")).measureSettingsSection()
+            } footer: {
+                Text(String(localized: "Bars show on each account in the menu and on the desktop widget."))
+                    .measureSettingsSection()
+            }.measureSettingsSection()
+            Section {
+                ForEach(available, id: \.self) { metric in
+                    metricRow(metric) {
+                        Button { model.addBar(metric) } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .foregroundStyle(slots.count == 3 ? Color.secondary : Color.green)
+                        }.disabled(slots.count == 3)
+                            .accessibilityLabel(Text(String(localized: "Add \(metric.title)")))
+                    }
+                }
+            } header: {
+                Text(String(localized: "Add a bar")).measureSettingsSection()
+            } footer: {
+                Text(slots.count == 3 ? String(localized: "Limit reached (3).") :
+                     String(localized: "Per-model limits such as Fable come only from the account signed in to Claude Code on this Mac. Other accounts show –."))
+                    .measureSettingsSection()
+            }.measureSettingsSection()
+            Section {
+                Picker(String(localized: "API credits"), selection: Binding(get: {
+                    CreditsDisplay(rawValue: creditsDisplay) ?? .providers
+                }, set: { creditsDisplay = $0.rawValue })) {
+                    Text(String(localized: "Each provider")).tag(CreditsDisplay.providers)
+                    Text(String(localized: "Total only")).tag(CreditsDisplay.total)
+                    Text(String(localized: "Off")).tag(CreditsDisplay.off)
+                }.pickerStyle(.menu)
+                Picker(String(localized: "Warn before expiry"), selection: Binding(get: {
+                    [3, 7, 14].contains(creditsWarnDays) ? creditsWarnDays : 7
+                }, set: { creditsWarnDays = $0 })) {
+                    Text(String(localized: "3 days")).tag(3)
+                    Text(String(localized: "7 days")).tag(7)
+                    Text(String(localized: "14 days")).tag(14)
+                }.pickerStyle(.menu).disabled(creditsDisplay == CreditsDisplay.off.rawValue)
+            } header: {
+                Text(String(localized: "API credits")).measureSettingsSection()
+            }.measureSettingsSection()
+        }
+        .formStyle(.grouped)
+    }
+
+    private func metricRow<Controls: View>(_ metric: UsageMetric, @ViewBuilder controls: () -> Controls) -> some View {
+        HStack(spacing: 8) {
+            Circle().fill(Color(nsColor: metric.barColor)).frame(width: 8, height: 8).accessibilityHidden(true)
+            Text(verbatim: metric.title)
+            Spacer()
+            controls()
+        }
+        .font(.body)
+        .controlSize(.regular)
+        .frame(height: 24)
+        .buttonStyle(.borderless)
     }
 }
 

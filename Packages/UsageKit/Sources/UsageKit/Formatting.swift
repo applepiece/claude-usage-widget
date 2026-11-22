@@ -4,11 +4,6 @@ import Foundation
 @MainActor
 public enum UsageFormatting {
     public static let iso = ISO8601DateFormatter()
-    static let fractionalISO: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
     static let clock: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US")
@@ -29,15 +24,33 @@ public enum UsageFormatting {
     }()
 }
 
-@MainActor
-public func parseISO(_ value: String) -> Date? {
-    if let date = UsageFormatting.fractionalISO.date(from: value) { return date }
-    if let date = UsageFormatting.iso.date(from: value) { return date }
-    if let dot = value.firstIndex(of: ".") {
-        let tail = value[dot...].drop(while: { $0 == "." || $0.isNumber })
-        return UsageFormatting.iso.date(from: String(value[..<dot]) + String(tail))
+// The lock confines both cached, non-Sendable formatters, including concurrent metric lookups.
+private final class ISODateParser: @unchecked Sendable {
+    static let shared = ISODateParser()
+    private let lock = NSLock()
+    private let whole = ISO8601DateFormatter()
+    private let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    func date(from value: String) -> Date? {
+        lock.withLock {
+            if let date = fractional.date(from: value) { return date }
+            if let date = whole.date(from: value) { return date }
+            // Older Foundation versions reject microseconds; retain the reset rather than lose it.
+            if let dot = value.firstIndex(of: ".") {
+                let tail = value[dot...].drop(while: { $0 == "." || $0.isNumber })
+                return whole.date(from: String(value[..<dot]) + String(tail))
+            }
+            return nil
+        }
     }
-    return nil
+}
+
+public func parseISO(_ value: String) -> Date? {
+    ISODateParser.shared.date(from: value)
 }
 
 @MainActor

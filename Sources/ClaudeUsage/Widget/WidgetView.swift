@@ -5,8 +5,9 @@ import UsageKit
 final class WidgetView: NSView {
     var accountTag = ""
     var showsMascot = true
-    var five: (pct: Double, when: String)?
-    var seven: (pct: Double, when: String)?
+    var bars: [(metric: UsageMetric, data: (pct: Double, when: String)?)] =
+        UsageMetric.defaultSlots.map { ($0, nil) }
+    private var severity = 0
     var offline = true
     var signedOut = false
     var reduceMotion = false
@@ -66,9 +67,14 @@ final class WidgetView: NSView {
         return img
     }
 
-    // Pokemon-ish flat palette (fixed per row: orange = 5H, purple = WK)
-    private let orangeFill = usageOrange
-    private let purpleFill = usagePurple
+    func configureBars(account: UsageAccount?, slots: [UsageMetric]) {
+        severity = UsageBarLayout.moodSeverity(for: account)
+        bars = slots.map { metric in
+            let data = account.flatMap { metric.value(for: $0) }
+            return (metric, data.map { ($0.percent, $0.resetsAt.map { fmtWhen($0) } ?? String(localized: "READY")) })
+        }
+        needsDisplay = true
+    }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
@@ -79,13 +85,6 @@ final class WidgetView: NSView {
         effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     }
 
-    private var severity: Int {  // 0 ok, 1 worried, 2 panic
-        let p = max(five?.pct ?? 0, seven?.pct ?? 0)
-        if p >= 90 { return 2 }
-        if p >= 70 { return 1 }
-        return 0
-    }
-
     private var isNight: Bool {
         if let o = nightOverride { return o }
         let h = Calendar.current.component(.hour, from: Date())
@@ -93,13 +92,15 @@ final class WidgetView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        drawBar(y: 42, data: five, fill: orangeFill, label: "5H")
-        drawBar(y: 10, data: seven, fill: purpleFill, label: "WK")
+        let origins = UsageBarLayout.widgetBarOrigins(count: bars.count)
+        for (index, bar) in bars.enumerated() {
+            drawBar(y: CGFloat(origins[index]), data: bar.data, metric: bar.metric)
+        }
         if showsMascot { drawClawd() }
     }
 
     // ============ compact flat Pokemon-style bars ============
-    private func drawBar(y: CGFloat, data: (pct: Double, when: String)?, fill: NSColor, label: String) {
+    private func drawBar(y: CGFloat, data: (pct: Double, when: String)?, metric: UsageMetric) {
         let border = isDark ? NSColor(red: 0.93, green: 0.90, blue: 0.84, alpha: 1)
                             : NSColor(red: 0.15, green: 0.13, blue: 0.10, alpha: 1)
         let track = isDark ? NSColor(red: 0.23, green: 0.22, blue: 0.19, alpha: 1)
@@ -123,20 +124,22 @@ final class WidgetView: NSView {
         if !offline, !signedOut, data != nil, pct > 0 {
             let inner = box.insetBy(dx: 3, dy: 3)
             let w = max(4, (inner.width * CGFloat(pct) / 100).rounded())
-            fill.setFill()
+            metric.barColor.setFill()
             NSRect(x: inner.minX, y: inner.minY, width: w, height: inner.height).fill()
         }
 
         let font = pixelFont(8)
-        let status = signedOut ? "SIGN IN" : (offline ? "OFFLINE" : (data?.when ?? "-"))
+        let status = signedOut ? String(localized: "SIGN IN") : (offline ? String(localized: "OFFLINE") : (data?.when ?? "–"))
         // the account tag rides inside the bar (only set when two accounts are stacked),
         // so the widget keeps its original size and nothing floats over the wallpaper
-        let when = accountTag.isEmpty ? status : accountTag + " " + status
-        (when as NSString).draw(
-            at: NSPoint(x: box.minX + 7, y: y + 7),
-            withAttributes: [.font: font, .foregroundColor: ink])
         let ps = ((offline || signedOut || data == nil) ? "–" : "\(Int(pct.rounded()))%") as NSString
         let sz = ps.size(withAttributes: [.font: font])
+        let labelWidth = box.width - 14 - sz.width - 4
+        let when = metric.widgetLabel(reset: status, accountTag: accountTag, availableWidth: Double(labelWidth)) {
+            Double(($0 as NSString).size(withAttributes: [.font: font]).width)
+        }
+        (when as NSString).draw(at: NSPoint(x: box.minX + 7, y: y + 7),
+                               withAttributes: [.font: font, .foregroundColor: ink])
         ps.draw(at: NSPoint(x: box.maxX - 7 - sz.width, y: y + 7),
                 withAttributes: [.font: font, .foregroundColor: ink])
     }
@@ -172,7 +175,8 @@ final class WidgetView: NSView {
         let bobBase = reduceMotion ? 0 : dancing ? CGFloat(Int(t * 4) % 2) * 3 - 1 : (sin(t * (p == .sleep ? 1.0 : 2.0)) * 2).rounded()
         let jitter = !reduceMotion && mood == 2 ? (sin(t * 22) * 1).rounded() : 0
         let ox = 4 + jitter
-        let oyTop = 70 + bobBase
+        let mascotOffset = bounds.height - 74
+        let oyTop = 70 + mascotOffset + bobBase
 
         // clickable leg band (below the body): click to tuck into the menu bar
         legHitRect = NSRect(x: ox, y: oyTop - 19 * u, width: 18 * u, height: 7 * u)
@@ -188,7 +192,7 @@ final class WidgetView: NSView {
 
         // floor shadow (fixed: sells the float)
         NSColor.black.withAlphaComponent(isDark ? 0.35 : 0.16).setFill()
-        NSRect(x: ox + 4 * u, y: 6, width: 12 * u, height: 2).fill()
+        NSRect(x: ox + 4 * u, y: max(0, 6 + mascotOffset), width: 12 * u, height: 2).fill()
 
         // legs: front pair full, back pair shorter + darker (depth)
         let liftA = (dancing ? Int(t * 4) : Int(sin(t * 3.0) > 0 ? 1 : 0)) % 2

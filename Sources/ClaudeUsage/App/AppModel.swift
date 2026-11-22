@@ -39,6 +39,26 @@ final class AppModel {
         return preferences.effectiveShortNames(in: accounts)
     }
 
+    var barSlots: [UsageMetric] {
+        _ = preferencesRevision
+        return preferences.barSlots
+    }
+
+    func addBar(_ metric: UsageMetric) {
+        preferences.add(metric)
+        preferencesRevision += 1
+    }
+
+    func removeBar(at index: Int) {
+        preferences.remove(at: index)
+        preferencesRevision += 1
+    }
+
+    func moveBar(from source: Int, to destination: Int) {
+        preferences.move(from: source, to: destination)
+        preferencesRevision += 1
+    }
+
     func customShortName(for id: String) -> String {
         _ = preferencesRevision
         return preferences.shortNames[id] ?? ""

@@ -75,6 +75,12 @@ public struct CreditProvider: Decodable, Sendable, Identifiable {
 
     public var providerType: String { type ?? id }
 
+    public var hasBalance: Bool {
+        error == nil && remaining?.isFinite == true && granted?.isFinite == true
+    }
+
+    public var consoleURL: URL? { CreditFormatting.consoleURL(console) }
+
     public var glyphProvider: Provider? {
         switch type {
         case "anthropic": return .claude
@@ -91,16 +97,17 @@ public enum CreditSamples {
         let anchor = iso.string(from: now)
         let expiry = iso.string(from: now.addingTimeInterval(18 * 86400))
         return [
-            CreditProvider(id: "anthropic", type: "anthropic", label: "Claude API · kkpk", remaining: 199.95, granted: 200,
-                           spentSinceAnchor: 0.05, anchorAt: anchor,
-                           nextExpiry: CreditExpiry(date: expiry, amount: 199.95),
+            CreditProvider(id: "anthropic", type: "anthropic", label: "Claude API · kkpk", remaining: 199.52, granted: 200,
+                           spentSinceAnchor: 0.48, anchorAt: anchor,
+                           nextExpiry: CreditExpiry(date: expiry, amount: 199.52),
                            console: "https://platform.claude.com/settings/billing", extra: 9.07),
-            CreditProvider(id: "anthropic_pho", type: "anthropic", label: "Claude API · pho", remaining: 200, granted: 200,
-                           anchorAt: anchor, nextExpiry: CreditExpiry(date: expiry, amount: 200),
+            CreditProvider(id: "anthropic_pho", type: "anthropic", label: "Claude API · pho", remaining: 24, granted: 200,
+                           spentSinceAnchor: 176, spendSource: .ledgerPartial, anchorAt: anchor,
+                           nextExpiry: CreditExpiry(date: expiry, amount: 24),
                            console: "https://platform.claude.com/settings/billing", extra: 0),
-            CreditProvider(id: "openai", type: "openai", label: "OpenAI API", remaining: 5.25, granted: 100,
-                           spentSinceAnchor: 94.75, spendSource: .costsAPI, anchorAt: anchor,
-                           nextExpiry: CreditExpiry(date: iso.string(from: now.addingTimeInterval(2 * 86400)), amount: 5.25),
+            CreditProvider(id: "openai", type: "openai", label: "OpenAI API", remaining: 90.08, granted: 111,
+                           spentSinceAnchor: 20.92, spendSource: .costsAPI, anchorAt: anchor,
+                           nextExpiry: CreditExpiry(date: iso.string(from: now.addingTimeInterval(2 * 86400)), amount: 28.66),
                            console: "https://platform.openai.com/settings/organization/billing/credit-grants"),
         ]
     }
@@ -125,24 +132,31 @@ public struct CreditSnapshot: Sendable {
 
 /// Shared visible and spoken text prevents estimates losing their qualification.
 public struct CreditRowPresentation: Sendable {
+    public let provider: CreditProvider
+    public let shortLabel: String
     public let amount: String
-    public let subtitle: String
+    public let detailItems: [String]
     public let annotation: String
     public let detail: String
     public let showsMeter: Bool
     public let fraction: Double
-    public let warning: Bool
+    public let warningReason: CreditWarning?
     public let stale: Bool
+    public var warning: Bool { warningReason != nil }
+    public var unavailable: Bool { !provider.hasBalance }
 
     public init(_ provider: CreditProvider, updatedAt: Date?, now: Date,
-                locale: Locale = .current, timeZone: TimeZone = .current) {
+                warnDays: Int = 7, locale: Locale = .current, timeZone: TimeZone = .current) {
+        self.provider = provider
+        shortLabel = Self.shortLabel(provider.label)
         stale = CreditFormatting.isStale(updatedAt: updatedAt, now: now)
-        if provider.error == nil, let remaining = provider.remaining, let granted = provider.granted {
-            amount = CreditFormatting.amountLeft(remaining, partial: provider.spendSource == .ledgerPartial, locale: locale)
-            subtitle = CreditFormatting.subtitle(granted: granted, expiry: provider.nextExpiry, locale: locale, timeZone: timeZone)
+        detailItems = CreditFormatting.detailItems(provider, updatedAt: updatedAt, now: now, locale: locale, timeZone: timeZone)
+        if provider.hasBalance, let remaining = provider.remaining, let granted = provider.granted {
+            amount = CreditFormatting.amount(remaining, partial: provider.spendSource == .ledgerPartial)
             showsMeter = granted > 0
             fraction = CreditFormatting.fraction(remaining: remaining, granted: granted)
-            warning = CreditFormatting.warning(remaining: remaining, granted: granted, expiry: provider.nextExpiry?.date, now: now)
+            warningReason = CreditFormatting.warningReason(remaining: remaining, granted: granted, expiry: provider.nextExpiry,
+                                                           now: now, warnDays: warnDays, timeZone: timeZone)
             var annotations: [String] = []
             if let anchor = provider.anchorAt, let date = CreditFormatting.date(anchor),
                (provider.staleDays ?? 0) >= 7 || now.timeIntervalSince(date) >= 7 * 86400 {
@@ -152,23 +166,107 @@ public struct CreditRowPresentation: Sendable {
             if stale { annotations.append(String(localized: "Balance update overdue", locale: locale)) }
             annotation = annotations.joined(separator: " · ")
         } else {
-            amount = String(localized: "Unavailable", locale: locale)
-            subtitle = ""
+            amount = "—"
             annotation = provider.error ?? String(localized: "Invalid balance", locale: locale)
             showsMeter = false
             fraction = 0
-            warning = false
+            warningReason = nil
         }
-        detail = [provider.label, amount, subtitle, annotation, provider.note]
+        detail = ([shortLabel, amount] + detailItems + [annotation, provider.note])
             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    public static func shortLabel(_ label: String) -> String {
+        let fallback = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !fallback.isEmpty else { return String(localized: "API credits") }
+        guard label.range(of: #"\bAPI\b"#, options: .regularExpression) != nil else { return label }
+        let shortened = label.replacingOccurrences(of: #"\s*\bAPI\b"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return shortened.isEmpty ? fallback : shortened
+    }
+}
+
+public enum CreditWarning: Equatable, Sendable {
+    case expiry(days: Int, amount: Double)
+    case lowBalance(percent: Int)
+}
+
+/// Owns section visibility and row placement so all display modes are testable without AppKit.
+public struct CreditsMenuPresentation: Sendable {
+    public let display: CreditsDisplay
+    public let totalRemaining: Double
+    public let totalAmount: String
+    public let rows: [CreditRowPresentation]
+    public let warning: String?
+
+    public var mainRows: [CreditRowPresentation] { display == .providers ? rows : [] }
+    public var submenuRows: [CreditRowPresentation] { display == .total ? rows : [] }
+    public var showsSection: Bool { display != .off }
+    public var structure: CreditMenuStructure { CreditMenuStructure(display: display, providerIDs: rows.map { $0.provider.id }) }
+
+    /// Measure complete amount strings with the renderer's font, including estimates and errors.
+    public func amountColumnWidth(measure: (String) -> Double) -> Double {
+        rows.reduce(0) { max($0, measure($1.amount)) }
+    }
+
+    public init(providers: [CreditProvider], display: CreditsDisplay, updatedAt: Date?, now: Date,
+                warnDays: Int = 7, locale: Locale = .current, timeZone: TimeZone = .current) {
+        self.display = providers.isEmpty ? .off : display
+        let healthy = providers.filter(\.hasBalance)
+        totalRemaining = healthy.reduce(0) { $0 + max(0, $1.remaining ?? 0) }
+        let total = healthy.isEmpty ? "—" :
+            CreditFormatting.amountLeft(totalRemaining, partial: healthy.contains { $0.spendSource == .ledgerPartial }, locale: locale)
+        let unavailable = providers.count - healthy.count
+        totalAmount = total + (unavailable > 0 ? String(localized: " · \(unavailable) unavailable", locale: locale) : "")
+        rows = self.display == .off ? [] : providers.map {
+            CreditRowPresentation($0, updatedAt: updatedAt, now: now, warnDays: warnDays, locale: locale, timeZone: timeZone)
+        }
+        let warnings = rows.filter(\.warning)
+        // Imminent expiries come first, then the lowest remaining fraction.
+        let urgent = warnings.min { lhs, rhs in
+            switch (lhs.warningReason, rhs.warningReason) {
+            case let (.expiry(left, _), .expiry(right, _)): return left < right
+            case (.expiry, _): return true
+            case (_, .expiry): return false
+            default: return lhs.fraction < rhs.fraction
+            }
+        }
+        if let urgent, let reason = urgent.warningReason {
+            let text: String
+            switch reason {
+            case let .expiry(days, amount):
+                let value = CreditFormatting.amount(amount, partial: urgent.provider.spendSource == .ledgerPartial)
+                switch days {
+                case 0: text = String(localized: "\(urgent.shortLabel): \(value) expires today", locale: locale)
+                case 1: text = String(localized: "\(urgent.shortLabel): \(value) expires tomorrow", locale: locale)
+                default: text = String(localized: "\(urgent.shortLabel): \(value) expires in \(days) days", locale: locale)
+                }
+            case let .lowBalance(percent):
+                text = String(localized: "\(urgent.shortLabel): \(percent)% left", locale: locale)
+            }
+            let more = warnings.count - 1
+            warning = more > 0 ? text + String(localized: " · +\(more) more", locale: locale) : text
+        } else {
+            warning = nil
+        }
     }
 }
 
 /// USD balances and localized expiry dates, independent of AppKit and wall time.
 public enum CreditFormatting {
+    public static func amount(_ remaining: Double, partial: Bool = false) -> String {
+        (partial ? "≤" : "") + dollars(remaining, fixedDecimals: true)
+    }
+
+    public static func consoleURL(_ value: String?) -> URL? {
+        guard let value, let url = URL(string: value), url.scheme?.lowercased() == "https",
+              let host = url.host, !host.isEmpty else { return nil }
+        return url
+    }
+
     public static func amountLeft(_ remaining: Double, partial: Bool = false, locale: Locale = .current) -> String {
-        let amount = dollars(remaining, fixedDecimals: true)
-        return (partial ? "≤ " : "") + String(localized: "\(amount) left", locale: locale)
+        let value = amount(remaining, partial: partial)
+        return String(localized: "\(value) left", locale: locale)
     }
 
     public static func subtitle(granted: Double, expiry: CreditExpiry?, locale: Locale = .current,
@@ -188,11 +286,58 @@ public enum CreditFormatting {
         return min(1, max(0, remaining / granted))
     }
 
-    public static func warning(remaining: Double, granted: Double, expiry: String?, now: Date) -> Bool {
-        guard granted > 0 else { return false }
-        if fraction(remaining: remaining, granted: granted) < 0.10 { return true }
-        guard let expiry, let date = date(expiry) else { return false }
-        return date.timeIntervalSince(now) <= 3 * 86400
+    public static func warning(remaining: Double, granted: Double, expiry: String?, now: Date,
+                               warnDays: Int = 7, timeZone: TimeZone = .current) -> Bool {
+        warningReason(remaining: remaining, granted: granted,
+                      expiry: expiry.map { CreditExpiry(date: $0, amount: remaining) },
+                      now: now, warnDays: warnDays, timeZone: timeZone) != nil
+    }
+
+    public static func warningReason(remaining: Double, granted: Double, expiry: CreditExpiry?, now: Date,
+                                     warnDays: Int = 7, timeZone: TimeZone = .current) -> CreditWarning? {
+        if let expiry, expiry.amount.isFinite, expiry.amount > 0, let date = date(expiry.date), date >= now {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = timeZone
+            let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now),
+                                               to: calendar.startOfDay(for: date)).day ?? 0
+            if days <= warnDays { return .expiry(days: days, amount: expiry.amount) }
+        }
+        if granted > 0, remaining.isFinite, granted.isFinite, remaining / granted < 0.20 {
+            return .lowBalance(percent: Int((fraction(remaining: remaining, granted: granted) * 100).rounded()))
+        }
+        return nil
+    }
+
+    public static func detailItems(_ provider: CreditProvider, updatedAt: Date?, now: Date,
+                                   locale: Locale = .current, timeZone: TimeZone = .current) -> [String] {
+        var items: [String] = []
+        if let granted = provider.granted, granted.isFinite {
+            let value = amount(granted)
+            items.append(String(localized: "Granted \(value)", locale: locale))
+        }
+        if let spent = provider.spentSinceAnchor, spent.isFinite,
+           let anchor = provider.anchorAt.flatMap(date) {
+            let day = shortDate(anchor, locale: locale, timeZone: timeZone)
+            let value = amount(spent)
+            items.append(String(localized: "Used since \(day)  \(value)", locale: locale))
+        }
+        if let expiry = provider.nextExpiry, expiry.amount.isFinite, let date = date(expiry.date) {
+            let day = shortDate(date, locale: locale, timeZone: timeZone)
+            let value = amount(expiry.amount)
+            items.append(date < now ? String(localized: "Expired \(day)", locale: locale) :
+                         String(localized: "Next expiry \(day)  \(value)", locale: locale))
+        }
+        if let extra = provider.extra, extra.isFinite, extra > 0 {
+            let value = amount(extra)
+            items.append(String(localized: "Purchased balance \(value)", locale: locale))
+        }
+        switch provider.spendSource {
+        case .ledger, .ledgerPartial: items.append(String(localized: "Source: bridge ledger", locale: locale))
+        case .costsAPI: items.append(String(localized: "Source: OpenAI costs API", locale: locale))
+        case nil: break
+        }
+        if let updatedAt { items.append(MenuFormatting.updated(since: updatedAt, now: now)) }
+        return items
     }
 
     public static func isStale(updatedAt: Date?, now: Date) -> Bool {
@@ -229,9 +374,6 @@ public enum CreditFormatting {
             formatter.isLenient = false
             return formatter.date(from: value)
         }
-        let formatter = ISO8601DateFormatter()
-        if let date = formatter.date(from: value) { return date }
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: value)
+        return parseISO(value)
     }
 }

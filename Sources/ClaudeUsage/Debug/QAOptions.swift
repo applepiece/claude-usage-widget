@@ -39,6 +39,12 @@ struct QAOptions {
                 if let names = try? JSONDecoder().decode([String: String].self, from: Data(value.utf8)) {
                     defaults.set(names, forKey: key)
                 }
+            } else if key == "barSlots" {
+                defaults.set(value.components(separatedBy: ",").map {
+                    $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                }, forKey: key)
+            } else if key == "creditsWarnDays", let days = Int(value) {
+                defaults.set(days, forKey: key)
             } else if ["barNumbers", "menuBarAlways", "minimized", "showAPICredits"].contains(key) {
                 defaults.set(["true", "1", "yes"].contains(value.lowercased()), forKey: key)
             } else { defaults.set(value, forKey: key) }
@@ -68,6 +74,8 @@ struct QAOptions {
                     LimitInfo(kind: "weekly_scoped", percent: 0,
                               scope: LimitScope(model: LimitModel(displayName: "Sonnet"))),
                 ]
+                accounts[0].fiveHour = accounts[0].limits?.first
+                accounts[0].sevenDay = accounts[0].limits?.dropFirst().first
             }
         default: break
         }
@@ -97,6 +105,7 @@ extension AppDelegate {
             switch kind {
             case "settings-general": tab = .general
             case "settings-menubar": tab = .menuBar
+            case "settings-layout": tab = .layout
             case "settings-accounts": tab = .accounts
             case "settings-about": tab = .about
             default: return

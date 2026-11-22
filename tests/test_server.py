@@ -763,7 +763,7 @@ def send(value):
     print(json.dumps(value), flush=True)
 initialize = receive()
 assert initialize == {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-    "clientInfo": {"name": "claude-usage-widget", "version": "3.1.1"}}}
+    "clientInfo": {"name": "claude-usage-widget", "version": "3.2.0"}}}
 send({"method": "configWarning", "params": {}})
 send({"id": 1, "result": {}})
 assert receive() == {"jsonrpc": "2.0", "method": "initialized"}
@@ -855,7 +855,7 @@ sys.stdin.read()
         with patch.object(server, "fetch_usage", return_value=usage), patch.object(server, "fetch_account", return_value={"logged_in": False}):
             self.assertEqual(json.loads(self.request("GET", "/api/usage")[1]), usage)
             self.assertEqual(json.loads(self.request("GET", "/api/account")[1]), {"logged_in": False})
-        self.assertEqual(self.request("GET", "/api/ping"), (200, b'{"ok":true,"version":"3.1.1"}'))
+        self.assertEqual(self.request("GET", "/api/ping"), (200, b'{"ok":true,"version":"3.2.0"}'))
         for path in ("/", "/index.html"):
             code, body = self.request("GET", path)
             self.assertEqual(code, 200)

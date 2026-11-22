@@ -2,12 +2,13 @@ import Cocoa
 import SwiftUI
 
 enum SettingsTab: Int, CaseIterable {
-    case general, menuBar, accounts, about
+    case general, menuBar, layout, accounts, about
 
     var title: String {
         switch self {
         case .general: String(localized: "General")
         case .menuBar: String(localized: "Menu Bar")
+        case .layout: String(localized: "Layout")
         case .accounts: String(localized: "Accounts")
         case .about: String(localized: "About")
         }
@@ -16,6 +17,7 @@ enum SettingsTab: Int, CaseIterable {
         switch self {
         case .general: "gearshape"
         case .menuBar: "menubar.rectangle"
+        case .layout: "slider.horizontal.3"
         case .accounts: "person.2"
         case .about: "info.circle"
         }
@@ -115,7 +117,7 @@ final class SettingsWindowController: NSWindowController {
         guard height > 0 else { return }
         // Native grouped forms use section gaps and outer margins. The measured
         // sections include their headers/footers; allow the default outer inset.
-        let desired = ceil(height + 40)
+        let desired = ceil(height + (tab == .layout ? 64 : 40))
         guard abs((heights[tab] ?? 0) - desired) > 1 else { return }
         heights[tab] = desired
         if selected == tab {
@@ -138,7 +140,7 @@ final class SettingsWindowController: NSWindowController {
         let visible = (window.screen ?? NSScreen.main)?.visibleFrame
         let chrome = window.frame.height - window.contentLayoutRect.height
         let maximum = max(240, (visible?.height ?? 900) - chrome - 40)
-        let height = min(heights[selected] ?? 360, maximum)
+        let height = min(heights[selected] ?? (selected == .layout ? 640 : 360), maximum)
         // Include the toolbar above the 480 pt wide SwiftUI form and preserve
         // the window's top edge while animating between tabs.
         var frame = window.frame

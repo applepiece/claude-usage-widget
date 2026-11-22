@@ -117,7 +117,7 @@ public enum MenuFormatting {
     }
 
     @MainActor
-    public static func accountTooltip(_ account: UsageAccount, now: Date,
+    public static func accountTooltip(_ account: UsageAccount, now: Date, slots: [UsageMetric] = UsageMetric.defaultSlots,
                                        calendar: Calendar = .current, locale: Locale = .current,
                                        timeZone: TimeZone = .current) -> String {
         let identity = [account.providerName, planTitle(account.plan)].compactMap { $0 }.joined(separator: " ")
@@ -127,13 +127,15 @@ public enum MenuFormatting {
                          ? String(localized: "Sign-in expired") : String(localized: "Couldn't load usage"))
             parts.append(String(localized: "Renew in Settings"))
         } else {
-            for (name, limit) in [(String(localized: "Session"), account.fiveHour),
-                                   (String(localized: "Weekly"), account.sevenDay)] {
-                guard let value = limit?.value else {
+            for metric in slots {
+                let name = metric.title
+                let limit = metric.limit(for: account)
+                guard let data = metric.value(for: account) else {
                     parts.append(String(localized: "\(name) not reported for this plan"))
                     continue
                 }
-                let reset = limit?.resetsAt.flatMap(parseISO)
+                let value = data.percent
+                let reset = data.resetsAt
                 let text = shortResetText(value: value, reset: reset, now: now,
                                           calendar: calendar, locale: locale, timeZone: timeZone)
                 var detail = String(localized: "\(name) \(Int(value.rounded()))%")

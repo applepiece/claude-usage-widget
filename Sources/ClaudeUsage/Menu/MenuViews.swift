@@ -6,6 +6,21 @@ func providerAccent(_ provider: Provider) -> NSColor {
     provider == .codex ? NSColor(red: 0.27, green: 0.31, blue: 0.38, alpha: 1) : clawdSalmon
 }
 
+@MainActor
+extension UsageMetric {
+    var barColor: NSColor {
+        switch colorKey {
+        case .orange: usageOrange
+        case .purple: usagePurple
+        case .teal: .systemTeal
+        case .pink: .systemPink
+        case .blue: .systemBlue
+        case .brown: .systemBrown
+        case .green: .systemGreen
+        }
+    }
+}
+
 // The card shares the native item grid: text starts where item titles start
 // (after the state column) and right-aligned content ends where the account
 // rows' last number column ends, measured on macOS 27 without key equivalents.
@@ -235,15 +250,29 @@ enum AccountMenuTitle {
     static let titleInset: CGFloat = 22
     // Allow a 22pt native state/title gutter so the last column ends at x=286.
     // These are title-relative stops; verify the system gutter in native QA.
-    static let sessionTab: CGFloat = 210
     static let weeklyTab: CGFloat = 264
     private static let font = NSFont.systemFont(ofSize: 13)
     private static let numberFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
 
-    static func make(_ account: UsageAccount) -> NSAttributedString {
-        let failed = MenuFormatting.failedRowText(account.state)
+    static func caption(slots: [UsageMetric]) -> NSAttributedString {
+        let captionFont = NSFont.systemFont(ofSize: 10.5)
         let paragraph = NSMutableParagraphStyle()
-        paragraph.tabStops = (failed == nil ? [sessionTab, weeklyTab] : [weeklyTab]).map {
+        paragraph.tabStops = UsageBarLayout.menuColumnStops(count: slots.count).map {
+            NSTextTab(textAlignment: .right, location: $0)
+        }
+        paragraph.defaultTabInterval = 0
+        paragraph.baseWritingDirection = .leftToRight
+        let titles = slots.map { fittedLabel($0.shortTitle, width: 48, font: captionFont) }
+        return NSAttributedString(string: "\t" + titles.joined(separator: "\t"), attributes: [
+            .font: captionFont, .foregroundColor: NSColor.tertiaryLabelColor, .paragraphStyle: paragraph,
+        ])
+    }
+
+    static func make(_ account: UsageAccount, slots: [UsageMetric] = UsageMetric.defaultSlots) -> NSAttributedString {
+        let failed = MenuFormatting.failedRowText(account.state)
+        let stops = UsageBarLayout.menuColumnStops(count: slots.count)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.tabStops = (failed == nil ? stops : [Double(weeklyTab)]).map {
             NSTextTab(textAlignment: .right, location: $0)
         }
         paragraph.defaultTabInterval = 0
@@ -251,7 +280,7 @@ enum AccountMenuTitle {
         paragraph.baseWritingDirection = .leftToRight
         let text = NSMutableAttributedString(attributedString: attachment(providerGlyph(account.provider), y: -2))
         // Reserve room for a three-digit meter plus separation before the first tab.
-        let labelWidth = sessionTab - 48 - 16 - 8
+        let labelWidth = CGFloat(stops[0]) - 48 - 16 - 8
         text.append(NSAttributedString(string: " " + fittedLabel(account.label, width: labelWidth), attributes: [
             .font: font, .foregroundColor: account.state == .stale ? NSColor.secondaryLabelColor : NSColor.labelColor,
         ]))
@@ -261,9 +290,10 @@ enum AccountMenuTitle {
                 .font: numberFont, .foregroundColor: NSColor.systemOrange,
             ]))
         } else {
-            text.append(column(account.fiveHour?.value, color: usageOrange))
-            text.append(NSAttributedString(string: "\t"))
-            text.append(column(account.sevenDay?.value, color: usagePurple))
+            for (index, metric) in slots.enumerated() {
+                if index > 0 { text.append(NSAttributedString(string: "\t")) }
+                text.append(column(metric.value(for: account)?.percent, color: metric.barColor))
+            }
         }
         let range = NSRange(location: 0, length: text.length)
         text.addAttribute(.paragraphStyle, value: paragraph, range: range)
@@ -276,7 +306,8 @@ enum AccountMenuTitle {
         ])
     }
 
-    static func fittedLabel(_ label: String, width: CGFloat) -> String {
+    static func fittedLabel(_ label: String, width: CGFloat, font: NSFont? = nil) -> String {
+        let font = font ?? Self.font
         // Embedded newlines/tabs must not create a second line or a third column.
         let singleLine = label.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
         func measured(_ value: String) -> CGFloat {
@@ -346,46 +377,80 @@ enum AccountMenuTitle {
 /// Native items preserve AppKit's highlight, keyboard and click behavior.
 @MainActor
 enum CreditMenuTitle {
-    static func make(_ provider: CreditProvider, row: CreditRowPresentation) -> NSAttributedString {
-        let tint: NSColor = row.warning ? .systemOrange : (row.stale ? .secondaryLabelColor : .labelColor)
+    // Leave room for the native submenu arrow in the 300pt menu.
+    static let trailingTab: CGFloat = 248
+    private static let numberFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+
+    static func amountColumnWidth(_ presentation: CreditsMenuPresentation) -> CGFloat {
+        ceil(CGFloat(presentation.amountColumnWidth {
+            Double(($0 as NSString).size(withAttributes: [.font: numberFont]).width)
+        }))
+    }
+
+    static func header(total: String) -> NSAttributedString {
+        let text = NSMutableAttributedString(string: String(localized: "API credits"), attributes: [
+            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        text.append(NSAttributedString(string: "\t" + total, attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]))
+        text.addAttribute(.paragraphStyle, value: paragraph(), range: NSRange(location: 0, length: text.length))
+        return text
+    }
+
+    static func make(_ provider: CreditProvider, row: CreditRowPresentation, amountColumnWidth: CGFloat) -> NSAttributedString {
         let font = NSFont.systemFont(ofSize: 13)
-        let numberFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        let amountWidth = (row.amount as NSString).size(withAttributes: [.font: numberFont]).width
+        let barTab = trailingTab - amountColumnWidth - 8 - 56
+        let text = NSMutableAttributedString(attributedString: AccountMenuTitle.attachment(
+            AccountMenuTitle.providerGlyph(provider.glyphProvider), y: -2))
+        let label = AccountMenuTitle.fittedLabel(row.shortLabel, width: max(0, barTab - 24))
+        text.append(NSAttributedString(string: " " + label, attributes: [.font: font, .foregroundColor: NSColor.labelColor]))
+        text.append(NSAttributedString(string: "\t"))
+        // Resolve dynamic colors when AppKit draws the menu.
+        let meter = NSImage(size: NSSize(width: 56, height: 4), flipped: false) { _ in
+            guard row.showsMeter else { return true }
+            NSColor.labelColor.withAlphaComponent(0.18).setFill()
+            NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: 56, height: 4), xRadius: 2, yRadius: 2).fill()
+            if row.fraction > 0 {
+                (row.warning ? NSColor.systemOrange : NSColor.secondaryLabelColor).setFill()
+                NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: 56 * row.fraction, height: 4),
+                             xRadius: 2, yRadius: 2).fill()
+            }
+            return true
+        }
+        text.append(AccountMenuTitle.attachment(meter, y: 3))
+        text.append(NSAttributedString(string: "\t" + row.amount, attributes: [
+            .font: numberFont, .foregroundColor: row.unavailable ? NSColor.secondaryLabelColor : NSColor.labelColor,
+        ]))
+        text.addAttribute(.paragraphStyle, value: paragraph(barTab: barTab), range: NSRange(location: 0, length: text.length))
+        return text
+    }
+
+    static func warning(_ title: String) -> NSAttributedString {
+        let text = NSMutableAttributedString(string: "")
+        if let symbol = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
+                .applying(NSImage.SymbolConfiguration(paletteColors: [.systemOrange]))) {
+            symbol.size = NSSize(width: 12, height: 12)
+            text.append(AccountMenuTitle.attachment(symbol, y: -2))
+            text.append(NSAttributedString(string: " "))
+        }
+        text.append(NSAttributedString(string: title, attributes: [
+            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.systemOrange,
+        ]))
+        return text
+    }
+
+    private static func paragraph(barTab: CGFloat? = nil) -> NSParagraphStyle {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: AccountMenuTitle.weeklyTab)]
+        paragraph.tabStops = (barTab.map { [NSTextTab(textAlignment: .left, location: $0)] } ?? [])
+            + [NSTextTab(textAlignment: .right, location: trailingTab)]
         paragraph.defaultTabInterval = 0
         paragraph.baseWritingDirection = .leftToRight
         paragraph.lineBreakMode = .byClipping
-        let text = NSMutableAttributedString(attributedString: AccountMenuTitle.attachment(
-            AccountMenuTitle.providerGlyph(provider.glyphProvider), y: -2))
-        let label = AccountMenuTitle.fittedLabel(provider.label, width: max(0, AccountMenuTitle.weeklyTab - amountWidth - 28))
-        text.append(NSAttributedString(string: " " + label, attributes: [.font: font, .foregroundColor: NSColor.labelColor]))
-        text.append(NSAttributedString(string: "\t" + row.amount, attributes: [.font: numberFont, .foregroundColor: tint]))
-        if row.showsMeter {
-            text.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 11)]))
-            // Both track and fill resolve colors while drawing in the menu's appearance.
-            let meter = NSImage(size: NSSize(width: 40, height: 4), flipped: false) { _ in
-                NSColor.labelColor.withAlphaComponent(0.18).setFill()
-                NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: 40, height: 4), xRadius: 2, yRadius: 2).fill()
-                if row.fraction > 0 {
-                    (row.warning ? NSColor.systemOrange : usagePurple).setFill()
-                    NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: max(2, 40 * row.fraction), height: 4), xRadius: 2, yRadius: 2).fill()
-                }
-                return true
-            }
-            text.append(AccountMenuTitle.attachment(meter, y: 3))
-            text.append(NSAttributedString(string: "  " + row.subtitle, attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: row.warning ? NSColor.systemOrange : NSColor.secondaryLabelColor,
-            ]))
-        }
-        if !row.annotation.isEmpty {
-            text.append(NSAttributedString(string: "\n" + row.annotation, attributes: [
-                .font: NSFont.systemFont(ofSize: 10), .foregroundColor: NSColor.secondaryLabelColor,
-            ]))
-        }
-        text.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: text.length))
-        return text
+        return paragraph
     }
 }
 

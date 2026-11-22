@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, urlencode
 
-SERVER_VERSION = "3.1.1"
+SERVER_VERSION = "3.2.0"
 PORT = 8737
 SERVICE = "Claude Code-credentials"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"

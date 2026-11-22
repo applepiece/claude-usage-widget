@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var trackingMenu: NSMenu?
     var qaReadySent = false
     var defaultsUpdatePending = false
+    var accountsLoaded = false
+    var sizingWidget = false
     var accounts: [UsageAccount] {
         get { model.accounts }
         set { model.accounts = newValue }
@@ -60,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
             }
             accounts = qa.accounts()
+            accountsLoaded = true
             model.creditSnapshot = CreditSnapshot(providers: CreditSamples.providers(), updatedAt: Date())
             model.refreshing = qa.state == "refreshing"
         }
@@ -75,7 +78,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(reduceMotionChanged),
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         reduceMotionChanged()
-        let rect = NSRect(x: 0, y: 0, width: 216, height: 74)
+        let requestedWidgets = preferences.twoWidgets && preferences.secondaryID != "none" ? 2 : 1
+        let widgetCount = accountsLoaded ? (preferences.twoWidgets && preferences.secondary(in: accounts) != nil ? 2 : 1) : requestedWidgets
+        let rect = UsageBarLayout.widgetFrame(origin: .zero, barCount: preferences.barSlots.count, widgetCount: widgetCount)
         let panel = NSPanel(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
         self.panel = panel
@@ -88,8 +93,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.hidesOnDeactivate = false
         canvas.frame = rect
         panel.contentView = canvas
-        view.frame = rect
-        secondaryView.frame = rect
+        let rowHeight = CGFloat(UsageBarLayout.widgetHeight(count: preferences.barSlots.count))
+        view.frame = NSRect(x: 0, y: rect.height - rowHeight, width: 216, height: rowHeight)
+        secondaryView.frame = NSRect(x: 0, y: 0, width: 216, height: rowHeight)
+        secondaryView.isHidden = widgetCount == 1
         secondaryView.showsMascot = false
         for widget in [view, secondaryView] {
             canvas.addSubview(widget)
@@ -136,8 +143,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.animationTimer = nil
                     }
                 }
-                self.updateUI()
-                if let menu = self.trackingMenu { self.updateCreditsMenu(in: menu) }
+                self.updateUI(persistWidgetResize: true)
+                if let menu = self.trackingMenu {
+                    self.updateAccountMenu(in: menu)
+                    self.updateCreditsMenu(in: menu)
+                }
             }
         }
     }
@@ -151,7 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func panelMoved() {
-        guard let panel else { return }
+        guard !sizingWidget, let panel else { return }
         preferences.defaults.set(NSStringFromPoint(panel.frame.origin), forKey: "pos")
     }
 
@@ -235,35 +245,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.setAccessibilityLabel(content.title.accessibilityLabel)
     }
 
-    func updateUI() {
+    func updateUI(persistWidgetResize: Bool = false) {
         guard let panel else { return }
         model.widgetVisible = panel.isVisible
         model.lastUpdate = accounts.compactMap(MenuFormatting.timestamp).max()
         let primary = preferences.primary(in: accounts)
         let secondary = preferences.twoWidgets ? preferences.secondary(in: accounts) : nil
-        let height: CGFloat = secondary == nil ? 74 : 148
+        let slots = preferences.barSlots
+        let rowHeight = CGFloat(UsageBarLayout.widgetHeight(count: slots.count))
+        let waitingForSecondary = !accountsLoaded && preferences.twoWidgets && preferences.secondaryID != "none"
+        let widgetCount = secondary != nil || waitingForSecondary ? 2 : 1
+        let frame = UsageBarLayout.resizedWidgetFrame(panel.frame, barCount: slots.count, widgetCount: widgetCount)
+        let height = frame.height
         if panel.frame.height != height {
-            var frame = panel.frame
-            frame.origin.y += frame.height - height
-            frame.size.height = height
+            sizingWidget = true
             panel.setFrame(frame, display: false)
+            sizingWidget = false
+            if persistWidgetResize { preferences.defaults.set(NSStringFromPoint(frame.origin), forKey: "pos") }
         }
         canvas.frame.size = NSSize(width: 216, height: height)
-        view.frame = NSRect(x: 0, y: height - 74, width: 216, height: 74)
-        secondaryView.frame = NSRect(x: 0, y: 0, width: 216, height: 74)
-        secondaryView.isHidden = secondary == nil
+        view.frame = NSRect(x: 0, y: height - rowHeight, width: 216, height: rowHeight)
+        secondaryView.frame = NSRect(x: 0, y: 0, width: 216, height: rowHeight)
+        secondaryView.isHidden = widgetCount == 1
         let tags = preferences.effectiveShortNames(in: accounts)
         func apply(_ account: UsageAccount?, to widget: WidgetView) {
             widget.accountTag = secondary == nil ? "" : (account.flatMap { tags[$0.id] } ?? "")
             widget.signedOut = account == nil
             // a stale snapshot is still the last known truth; only a dead account reads OFFLINE
             widget.offline = account.map { $0.state != .ok && $0.state != .stale } ?? false
-            func convert(_ limit: LimitInfo?) -> (Double, String)? {
-                guard let limit, let value = limit.value else { return nil }
-                return (value, limit.resetsAt.flatMap(parseISO).map { fmtWhen($0) } ?? "READY")
-            }
-            widget.five = convert(account?.fiveHour)
-            widget.seven = convert(account?.sevenDay)
+            widget.configureBars(account: account, slots: slots)
             if let id = account?.id, let end = danceEnds[id] {
                 widget.danceUntil = widget.t + CGFloat(max(0, end.timeIntervalSinceNow))
             } else { widget.danceUntil = -1 }
@@ -278,6 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func receive(_ fresh: [UsageAccount]?) {
         refreshing = false
         if let fresh {
+            accountsLoaded = true
             failCount = 0
             for account in fresh where account.state == .ok {
                 if let old = previous[account.id], old.state == .ok {
