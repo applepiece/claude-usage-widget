@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, urlencode
 
-SERVER_VERSION = "3.2.0"
+SERVER_VERSION = "3.3.0"
 PORT = 8737
 SERVICE = "Claude Code-credentials"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -356,6 +356,56 @@ def codex_seconds():
         return 300
 
 
+def gemini_registry():
+    env = Path(os.environ.get("CLAUDE_USAGE_GEMINI_ENV",
+                              str(Path.home() / ".config/gemini-bridge/env")))
+    values = {}
+    try:
+        for line in env.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[7:].lstrip()
+            key, separator, value = line.partition("=")
+            if separator and key in ("GEMINI_BRIDGE_ACCOUNTS", "GEMINI_BRIDGE_PLAN_ENDS"):
+                values[key] = value.strip().strip("\"'")
+    except (OSError, UnicodeError):
+        pass
+    plan_ends = {}
+    for entry in values.get("GEMINI_BRIDGE_PLAN_ENDS", "").split(","):
+        label, separator, date = entry.strip().partition(":")
+        label, date = label.strip(), date.strip()
+        if not separator or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+            continue
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            continue
+        plan_ends[label] = date
+    accounts = []
+    labels = set()
+    for entry in values.get("GEMINI_BRIDGE_ACCOUNTS", "").split(","):
+        label, separator, home = entry.strip().partition(":")
+        label, home = label.strip(), home.strip()
+        if not separator or not public_text(label) or not home or label in labels:
+            continue
+        labels.add(label)
+        if home == "~" or home.startswith("~/"):
+            home = str(Path.home()) + home[1:]
+        accounts.append({
+            "id": "gemini-" + label, "label": label, "provider": "gemini",
+            "source": "gemini", "machine_login": False, "expires_at": plan_ends.get(label),
+            "email": None, "plan": None, "_home": home,
+        })
+    return accounts
+
+
+def gemini_seconds():
+    try:
+        return max(120, int(os.environ.get("CLAUDE_USAGE_GEMINI_SECONDS", "600")))
+    except ValueError:
+        return 600
+
+
 def codex_app_server_read(home, timeout=20):
     # Delegate login handling to the CLI; auth.json is never read here.
     env = os.environ.copy()
@@ -539,7 +589,7 @@ def account_registry():
                 accounts.append(machine)
     for account in accounts:
         account["provider"] = "claude"
-    return accounts + codex_registry()
+    return accounts + codex_registry() + gemini_registry()
 
 
 def valid_percent(value):
@@ -681,6 +731,127 @@ def fetch_codex_snapshot(account, state, now):
     return snapshot, status
 
 
+def gemini_live_snapshot(result):
+    windows = {"five_hour": None, "seven_day": None, "limits": None}
+    groups = result["command"]["data"]["groups"]
+    limits = []
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        name = public_text(group.get("name"))
+        buckets = group.get("buckets")
+        if not isinstance(buckets, list):
+            continue
+        is_gemini = bool(name and name.startswith("Gemini")) or any(
+            isinstance(bucket, dict) and isinstance(bucket.get("id"), str)
+            and bucket["id"].startswith("gemini-") for bucket in buckets)
+        if not is_gemini and not name:
+            continue
+        for bucket in buckets:
+            if not isinstance(bucket, dict):
+                continue
+            window = bucket.get("window")
+            if window not in ("5h", "weekly"):
+                continue
+            remaining = bucket.get("remaining_fraction")
+            if isinstance(remaining, bool):
+                continue
+            try:
+                remaining = float(remaining)
+                if not math.isfinite(remaining):
+                    continue
+            except (TypeError, ValueError, OverflowError):
+                continue
+            reset = None
+            raw_reset = bucket.get("reset_time")
+            if isinstance(raw_reset, str):
+                try:
+                    date = datetime.fromisoformat(raw_reset.replace("Z", "+00:00"))
+                    if date.tzinfo is not None:
+                        reset = raw_reset
+                except (ValueError, OverflowError):
+                    pass
+            item = {"utilization": min(100, max(0, round((1 - remaining) * 100, 1))),
+                    "resets_at": reset, "status": "rejected" if remaining <= 0 else "allowed"}
+            if is_gemini:
+                windows["five_hour" if window == "5h" else "seven_day"] = item
+            elif window == "weekly":
+                # UsageMetric supports scoped weekly slots, but no scoped 5h slot.
+                item["percent"] = item.pop("utilization")
+                item.update(kind="weekly_scoped", group=name,
+                            scope={"model": {"display_name": name}})
+                limits.append(item)
+    primary_limits = []
+    for key, kind in (("five_hour", "session"), ("seven_day", "weekly_all")):
+        window = windows[key]
+        if window is not None:
+            primary_limits.append({"kind": kind, "percent": window["utilization"],
+                                   "resets_at": window["resets_at"], "status": window["status"]})
+    windows["limits"] = primary_limits + limits or None
+    if not any(windows.values()):
+        raise ValueError("missing_gemini_usage")
+    return windows
+
+
+def fetch_gemini_snapshot(account, state, now):
+    try:
+        # Only inspect metadata. agy owns the token format and reads it itself.
+        token = Path(account["_home"]) / ".gemini/antigravity-cli/antigravity-oauth-token"
+        if not token.is_file() or token.stat().st_size == 0:
+            raise SignedOut()
+        if now >= state["next_at"]:
+            state["attempt_at"] = now
+            binary = Path(os.environ.get("CLAUDE_USAGE_AGY", str(Path.home() / ".local/bin/agy"))).expanduser()
+            env = dict(os.environ, HOME=account["_home"], AGY_CLI_FORCE_FILE_TOKEN_STORAGE="1")
+            process = subprocess.run(
+                [str(binary), "-p", "/usage", "--output-format", "json"],
+                env=env, cwd=account["_home"], stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=45,
+            )
+            result = None
+            for line in reversed(process.stdout.splitlines()):
+                try:
+                    value = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(value, dict):
+                    result = value
+                    break
+            if result is None:
+                raise ValueError("invalid_gemini_message")
+            if result.get("status") != "SUCCESS":
+                error = result.get("error")
+                if isinstance(error, str) and "auth" in error.lower():
+                    raise SignedOut()
+                raise ValueError("gemini_usage_error")
+            snapshot = gemini_live_snapshot(result)
+            fetched = time.time()
+            snapshot.update(fetched_at=fetched, as_of=fetched, quota_source="live")
+            state.update(snapshot=snapshot, state="ok", next_at=fetched + gemini_seconds())
+    except SignedOut:
+        state.update(snapshot=None, state="token_rejected", next_at=time.time() + 300)
+    except Exception:
+        # Never expose process output, OAuth URLs or exception text to clients.
+        state.update(state="stale" if state["snapshot"] else "error", next_at=time.time() + 300)
+    snapshot = dict(state["snapshot"] or {})
+
+    def current_window(window):
+        if window and window.get("resets_at"):
+            reset = datetime.fromisoformat(window["resets_at"].replace("Z", "+00:00")).timestamp()
+            if reset < now:
+                expired = dict(window, resets_at=None, status="allowed")
+                expired["percent" if "percent" in window else "utilization"] = 0
+                return expired
+        return window
+
+    for key in ("five_hour", "seven_day"):
+        if key in snapshot:
+            snapshot[key] = current_window(snapshot[key])
+    if snapshot.get("limits"):
+        snapshot["limits"] = [current_window(limit) for limit in snapshot["limits"]]
+    return snapshot, state["state"]
+
+
 def clean_window(raw):
     if not isinstance(raw, dict):
         return None
@@ -813,7 +984,8 @@ def fetch_registered_account(account, force=False):
     with state["lock"]:
         # A replacement credential must not inherit another login's snapshot.
         is_codex = account.get("provider") == "codex"
-        identity = (("codex", account["_home"]) if is_codex else
+        is_gemini = account.get("provider") == "gemini"
+        identity = ((account["provider"], account["_home"]) if is_codex or is_gemini else
                     (account["source"], account.get("_credential"),
                      hashlib.sha256(account.get("_token", "").encode()).digest()))
         if state["identity"] != identity:
@@ -826,6 +998,8 @@ def fetch_registered_account(account, force=False):
             state["next_at"] = 0.0
         if is_codex:
             snapshot, status = fetch_codex_snapshot(account, state, now)
+        elif is_gemini:
+            snapshot, status = fetch_gemini_snapshot(account, state, now)
         elif now >= state["next_at"]:
             state["attempt_at"] = now
             used_probe = account["source"] == "token"
@@ -849,7 +1023,7 @@ def fetch_registered_account(account, force=False):
             except Exception:
                 state.update(state="stale" if state["snapshot"] else "error",
                              next_at=time.time() + 300)
-        if not is_codex:
+        if not (is_codex or is_gemini):
             snapshot, status = state["snapshot"] or {}, state["state"]
         result = {key: account.get(key) for key in
                   ("id", "label", "email", "plan", "source", "machine_login", "expires_at", "provider")}

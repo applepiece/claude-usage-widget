@@ -3,7 +3,11 @@ import UsageKit
 
 @MainActor
 func providerAccent(_ provider: Provider) -> NSColor {
-    provider == .codex ? NSColor(red: 0.27, green: 0.31, blue: 0.38, alpha: 1) : clawdSalmon
+    switch provider {
+    case .claude: clawdSalmon
+    case .codex: NSColor(red: 0.27, green: 0.31, blue: 0.38, alpha: 1)
+    case .gemini: NSColor(red: 0.29, green: 0.48, blue: 0.85, alpha: 1)
+    }
 }
 
 @MainActor
@@ -35,12 +39,13 @@ func accountAvatar(_ account: UsageAccount?, size: CGFloat) -> NSImage {
     // appearance is current when the menu is built (the menu bar's, which is
     // dark over a dark wallpaper while the menu itself is light).
     let color = account.map { providerAccent($0.provider) } ?? .tertiaryLabelColor
-    let isCodex = account?.isCodex == true
+    let isBridgeAccount = account?.isBridgeAccount == true
+    let glyph = account?.provider == .gemini ? "✦" : "›_"
     let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
     color.setFill()
     NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: size, height: size)).fill()
-    if isCodex {
-        let text = NSAttributedString(string: "›_", attributes: [
+    if isBridgeAccount {
+        let text = NSAttributedString(string: glyph, attributes: [
             .font: NSFont.monospacedSystemFont(ofSize: size / 2, weight: .bold),
             .foregroundColor: NSColor.white,
         ])
@@ -87,7 +92,9 @@ final class AccountHeaderView: NSView {
             statusColor = .systemOrange
             statusSymbol = "exclamationmark.triangle.fill"
         case .tokenRejected:
-            status = String(localized: "Sign-in expired · renew in Settings")
+            status = account?.provider == .gemini
+                ? String(localized: "Signed out · renew in Settings")
+                : String(localized: "Sign-in expired · renew in Settings")
             statusColor = .systemRed
             statusSymbol = "xmark.octagon.fill"
         case .error:
@@ -269,7 +276,7 @@ enum AccountMenuTitle {
     }
 
     static func make(_ account: UsageAccount, slots: [UsageMetric] = UsageMetric.defaultSlots) -> NSAttributedString {
-        let failed = MenuFormatting.failedRowText(account.state)
+        let failed = MenuFormatting.failedRowText(account.state, provider: account.provider)
         let stops = UsageBarLayout.menuColumnStops(count: slots.count)
         let paragraph = NSMutableParagraphStyle()
         paragraph.tabStops = (failed == nil ? stops : [Double(weeklyTab)]).map {
@@ -331,8 +338,8 @@ enum AccountMenuTitle {
         NSImage(size: NSSize(width: 12, height: 12), flipped: false) { _ in
         if provider == .claude {
             drawClawdGlyph(in: NSRect(x: 0, y: 0, width: 12, height: 12), color: .labelColor)
-        } else if provider == .codex {
-            let text = NSAttributedString(string: "›_", attributes: [
+        } else if provider == .codex || provider == .gemini {
+            let text = NSAttributedString(string: provider == .gemini ? "✦" : "›_", attributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .bold),
                 .foregroundColor: NSColor.labelColor,
             ])

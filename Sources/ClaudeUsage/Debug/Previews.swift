@@ -31,6 +31,16 @@ func sampleAccounts(now: Date = Date()) -> [UsageAccount] {
                      source: "codex", fiveHour: limit(1, hours: 4), sevenDay: limit(0, hours: 168),
                      fetchedAt: now.timeIntervalSince1970, provider: .codex,
                      asOf: now.timeIntervalSince1970, quotaSource: "live"),
+        UsageAccount(id: "gemini-pho", label: "pho", source: "gemini",
+                     fiveHour: limit(1, hours: 5), sevenDay: limit(1, hours: 168), limits: [
+                        limit(1, hours: 5, kind: "session"),
+                        limit(1, hours: 168, kind: "weekly_all"),
+                        LimitInfo(kind: "weekly_scoped", group: "Claude and GPT models", percent: 0,
+                                  scope: LimitScope(model: LimitModel(displayName: "Claude and GPT models"))),
+                     ], fetchedAt: now.timeIntervalSince1970, expiresAt: "2026-12-19", provider: .gemini,
+                     asOf: now.timeIntervalSince1970, quotaSource: "live"),
+        UsageAccount(id: "gemini-apple", label: "apple", source: "gemini",
+                     state: .tokenRejected, provider: .gemini),
     ]
 }
 

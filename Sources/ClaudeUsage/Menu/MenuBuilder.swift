@@ -65,7 +65,7 @@ extension AppDelegate: NSMenuDelegate {
         caption.representedObject = preferences.accountMenuState
         caption.setAccessibilityLabel(slots.map(\.title).joined(separator: ", "))
         insert(caption, id: "caption")
-        let ordered = accounts.filter { !$0.isCodex } + accounts.filter { $0.isCodex }
+        let ordered = accountsByProvider(accounts)
         for account in ordered {
             let item = action(account.label, #selector(makePrimary(_:)), value: account.id,
                               checked: account.id == model.primary?.id)

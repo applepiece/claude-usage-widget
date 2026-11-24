@@ -102,6 +102,19 @@ struct StatusTitleTests {
         #expect(StatusTitle(accounts: [account(state: .stale)]).string == "P 85%")
     }
 
+    @Test func rejectedAccessibilityWordingIsSignedOutOnlyForGemini() {
+        for provider in Provider.allCases {
+            let account = UsageAccount(id: "pho", label: "pho", state: .tokenRejected, provider: provider)
+            for metric in BarMetric.allCases {
+                let title = StatusTitle(accounts: [account], metric: metric)
+                let tag = provider.tagPrefix + "P"
+                let status = provider == .gemini ? "signed out" : "sign-in expired"
+                #expect(title.string == tag + " !")
+                #expect(title.accessibilityLabel == tag + ", " + status)
+            }
+        }
+    }
+
     @Test func missingWindowsAreDashesAndMaxUsesAvailableWindow() {
         #expect(StatusTitle(accounts: [account(five: nil)], metric: .five).string == "P –")
         #expect(StatusTitle(accounts: [account(seven: nil)], metric: .seven).string == "P –")

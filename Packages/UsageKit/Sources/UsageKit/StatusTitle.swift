@@ -58,7 +58,7 @@ public struct StatusTitle: Equatable, Sendable {
     }
 
     private static func accessibilityValue(_ account: UsageAccount, metric: BarMetric) -> String {
-        if account.state == .tokenRejected { return "sign-in expired" }
+        if account.state == .tokenRejected { return account.provider == .gemini ? "signed out" : "sign-in expired" }
         if account.failed { return "couldn't load usage" }
         func window(_ value: Double?, _ name: String) -> String {
             value.map { "\(Int($0.rounded())) percent used, \(name)" } ?? "usage unavailable, \(name)"

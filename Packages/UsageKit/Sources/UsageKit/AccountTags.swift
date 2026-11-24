@@ -1,22 +1,36 @@
 import Foundation
 
+extension Provider {
+    public var tagPrefix: String {
+        switch self {
+        case .claude: ""
+        case .codex: "›"
+        case .gemini: "✦"
+        }
+    }
+}
+
+public func accountsByProvider(_ accounts: [UsageAccount]) -> [UsageAccount] {
+    Provider.allCases.flatMap { provider in accounts.filter { $0.provider == provider } }
+}
+
 public func accountTags(_ accounts: [UsageAccount]) -> [String: String] {
     var tags: [String: String] = [:]
     for account in accounts {
         let first = String(account.label.prefix(1)).uppercased()
         let collide = accounts.filter {
-            $0.isCodex == account.isCodex && String($0.label.prefix(1)).uppercased() == first
+            $0.provider == account.provider && String($0.label.prefix(1)).uppercased() == first
         }.count > 1
-        tags[account.id] = (account.isCodex ? "›" : "") + String(account.label.prefix(collide ? 2 : 1)).uppercased()
+        tags[account.id] = account.provider.tagPrefix + String(account.label.prefix(collide ? 2 : 1)).uppercased()
     }
-    var used = Set<String>()
+    var used: [Provider: Set<String>] = [:]
     for account in accounts {
-        let prefix = account.isCodex ? "›" : ""
+        let prefix = account.provider.tagPrefix
         let label = account.label.uppercased()
         var tag = tags[account.id] ?? prefix
         var length = tag.count - prefix.count
         var suffix = 2
-        while used.contains(tag) {
+        while used[account.provider, default: []].contains(tag) {
             if length < label.count {
                 length += 1
                 tag = prefix + String(label.prefix(length))
@@ -25,7 +39,7 @@ public func accountTags(_ accounts: [UsageAccount]) -> [String: String] {
                 suffix += 1
             }
         }
-        used.insert(tag)
+        used[account.provider, default: []].insert(tag)
         tags[account.id] = tag
     }
     return tags

@@ -4,6 +4,69 @@ import Testing
 @testable import UsageKit
 
 struct UsageKitTests {
+    @Test func geminiDecodingAndScopedWeeklyMetric() throws {
+        let data = Data("""
+        {"id":"gemini-pho","label":"pho","provider":"gemini","source":"gemini",
+         "machine_login":false,"expires_at":"2026-12-19","state":"ok",
+         "five_hour":{"utilization":1,"status":"allowed","resets_at":"2026-11-24T15:15:06Z"},
+         "seven_day":{"utilization":1,"status":"allowed","resets_at":"2026-12-01T10:15:06Z"},
+         "limits":[{"percent":0,"status":"allowed","kind":"weekly_scoped","group":"Claude and GPT models",
+                    "scope":{"model":{"display_name":"Claude and GPT models"}}}],
+         "fetched_at":1795515306,"as_of":1795515306,"quota_source":"live"}
+        """.utf8)
+        let account = try JSONDecoder().decode(UsageAccount.self, from: data)
+        #expect(account.provider == .gemini && account.providerName == "Gemini")
+        #expect(account.isBridgeAccount && !account.isCodex && !account.machineLogin)
+        #expect(account.info.provider == .gemini)
+        #expect(account.expiresAt == "2026-12-19")
+        #expect(account.fiveHour?.value == 1 && account.sevenDay?.value == 1)
+        #expect(account.quotaSource == "live" && account.usage.fetchedAt == account.asOf)
+        let metric = try #require(UsageMetric(raw: "weekly:Claude and GPT models"))
+        #expect(metric.value(for: account)?.percent == 0)
+        #expect(metric.limit(for: account)?.group == "Claude and GPT models")
+        #expect(UsageMetric.available(in: [account]).contains(metric))
+        let info = try JSONDecoder().decode(AccountInfo.self, from: Data("{\"logged_in\":true,\"provider\":\"gemini\"}".utf8))
+        #expect(info.provider == .gemini)
+    }
+
+    @Test func geminiTagsKeepCollisionsWithinEachProvider() {
+        let accounts = [
+            UsageAccount(id: "claude-pho", label: "pho"),
+            UsageAccount(id: "codex-pro", label: "pro", provider: .codex),
+            UsageAccount(id: "gemini-pho", label: "pho", provider: .gemini),
+            UsageAccount(id: "gemini-apple", label: "apple", provider: .gemini),
+        ]
+        #expect(accountTags(accounts) == ["claude-pho": "P", "codex-pro": "›P", "gemini-pho": "✦P", "gemini-apple": "✦A"])
+        let collisions = accounts + [
+            UsageAccount(id: "gemini-phil", label: "phil", provider: .gemini),
+            UsageAccount(id: "gemini-duplicate", label: "pho", provider: .gemini),
+        ]
+        let tags = accountTags(collisions)
+        #expect(tags["claude-pho"] == "P" && tags["codex-pro"] == "›P")
+        #expect(tags["gemini-pho"] == "✦PH")
+        #expect(tags["gemini-phil"] == "✦PHI")
+        #expect(tags["gemini-duplicate"] == "✦PHO")
+        #expect(tags["gemini-apple"] == "✦A")
+        // Even a Claude label containing the Gemini marker cannot lengthen a Gemini tag.
+        let marked = accounts + [UsageAccount(id: "marked-one", label: "✦P"),
+                                 UsageAccount(id: "marked-two", label: "✦Q")]
+        #expect(accountTags(marked)["gemini-pho"] == "✦P")
+    }
+
+    @Test func providerOrderingPreservesOrderWithinEachProvider() {
+        let accounts = [
+            UsageAccount(id: "gemini-apple", label: "apple", provider: .gemini),
+            UsageAccount(id: "codex-edu", label: "edu", provider: .codex),
+            UsageAccount(id: "pho", label: "pho"),
+            UsageAccount(id: "gemini-pho", label: "pho", provider: .gemini),
+            UsageAccount(id: "kkpk", label: "kkpk"),
+            UsageAccount(id: "codex-pro", label: "pro", provider: .codex),
+        ]
+        #expect(accountsByProvider(accounts).map(\.id) == ["pho", "kkpk", "codex-edu", "codex-pro", "gemini-apple", "gemini-pho"])
+        #expect(accountsByProvider([]).isEmpty)
+        #expect(!accounts[2].isBridgeAccount)
+    }
+
     @Test func providerTagsAndCollisions() {
         let accounts = [
             UsageAccount(id: "pho", label: "pho"),

@@ -108,9 +108,14 @@ public enum MenuFormatting {
         return String(localized: "Resets in \(parts.joined(separator: " "))")
     }
 
-    public static func failedRowText(_ state: AccountState) -> String? {
+    public static func rejectedAccountText(_ provider: Provider) -> String {
+        provider == .gemini ? String(localized: "Signed out") : String(localized: "Sign-in expired")
+    }
+
+    public static func failedRowText(_ state: AccountState, provider: Provider = .claude) -> String? {
         switch state {
-        case .tokenRejected: return String(localized: "⚠︎ expired")
+        case .tokenRejected:
+            return provider == .gemini ? String(localized: "⚠︎ signed out") : String(localized: "⚠︎ expired")
         case .error: return String(localized: "⚠︎ error")
         case .ok, .stale: return nil
         }
@@ -124,7 +129,7 @@ public enum MenuFormatting {
         var parts = [account.label, identity]
         if account.failed {
             parts.append(account.state == .tokenRejected
-                         ? String(localized: "Sign-in expired") : String(localized: "Couldn't load usage"))
+                         ? rejectedAccountText(account.provider) : String(localized: "Couldn't load usage"))
             parts.append(String(localized: "Renew in Settings"))
         } else {
             for metric in slots {
@@ -176,7 +181,7 @@ public enum MenuFormatting {
     }
 
     public static func accountSubtitle(_ account: UsageAccount, now: Date) -> String {
-        if account.state == .tokenRejected { return String(localized: "Sign-in expired") }
+        if account.state == .tokenRejected { return rejectedAccountText(account.provider) }
         if account.state == .error { return String(localized: "Couldn't load usage") }
         var parts = [planTitle(account.plan)].compactMap { $0 }
         if let value = account.fiveHour?.value {

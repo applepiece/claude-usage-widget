@@ -63,7 +63,7 @@ struct QAOptions {
                 accounts[index].asOf = accounts[index].fetchedAt
             }
         case "rejected", "error":
-            for index in accounts.indices where index == 0 || accounts[index].isCodex {
+            for index in accounts.indices where index == 0 || accounts[index].isBridgeAccount {
                 accounts[index].state = state == "rejected" ? .tokenRejected : .error
             }
         case "limits":

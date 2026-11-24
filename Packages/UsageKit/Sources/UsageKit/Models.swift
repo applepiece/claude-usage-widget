@@ -136,8 +136,8 @@ extension LimitInfo {
     }
 }
 
-public enum Provider: String, Decodable, Sendable {
-    case claude, codex
+public enum Provider: String, CaseIterable, Decodable, Sendable {
+    case claude, codex, gemini
 }
 
 public enum AccountState: String, Decodable, Sendable {
@@ -234,7 +234,14 @@ public struct UsageAccount: Decodable, Sendable {
     }
 
     public var isCodex: Bool { provider == .codex }
-    public var providerName: String { isCodex ? "Codex" : "Claude" }
+    public var isBridgeAccount: Bool { provider != .claude }
+    public var providerName: String {
+        switch provider {
+        case .claude: "Claude"
+        case .codex: "Codex"
+        case .gemini: "Gemini"
+        }
+    }
     public var failed: Bool { state == .error || state == .tokenRejected }
     public var usage: Usage {
         Usage(fiveHour: fiveHour, sevenDay: sevenDay, limits: limits,

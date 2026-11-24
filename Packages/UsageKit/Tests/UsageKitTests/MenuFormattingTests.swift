@@ -198,4 +198,19 @@ struct MenuFormattingTests {
         #expect(MenuFormatting.failedRowText(account.state) == "⚠︎ error")
         #expect(MenuFormatting.accountTooltip(account, now: now) == "pho · Claude Max · Couldn't load usage · Renew in Settings")
     }
+
+    @Test @MainActor func rejectedAccountWordingIsSignedOutOnlyForGemini() {
+        let now = Date(timeIntervalSince1970: 100_000)
+        for provider in Provider.allCases {
+            let account = UsageAccount(id: "pho", label: "pho", state: .tokenRejected, provider: provider)
+            let status = provider == .gemini ? "Signed out" : "Sign-in expired"
+            #expect(MenuFormatting.rejectedAccountText(provider) == status)
+            #expect(MenuFormatting.failedRowText(account.state, provider: provider) == (provider == .gemini ? "⚠︎ signed out" : "⚠︎ expired"))
+            #expect(MenuFormatting.accountSubtitle(account, now: now) == status)
+            #expect(MenuFormatting.accountTooltip(account, now: now) == "pho · \(account.providerName) · \(status) · Renew in Settings")
+            #expect(MenuFormatting.failedRowText(.error, provider: provider) == "⚠︎ error")
+            #expect(MenuFormatting.failedRowText(.ok, provider: provider) == nil)
+            #expect(MenuFormatting.failedRowText(.stale, provider: provider) == nil)
+        }
+    }
 }

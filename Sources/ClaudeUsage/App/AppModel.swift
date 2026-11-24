@@ -32,7 +32,7 @@ final class AppModel {
         _ = preferencesRevision
         return preferences.secondary(in: accounts)
     }
-    var machineLogin: UsageAccount? { accounts.first { $0.machineLogin && !$0.isCodex } }
+    var machineLogin: UsageAccount? { accounts.first { $0.machineLogin && !$0.isBridgeAccount } }
 
     var shortNames: [String: String] {
         _ = preferencesRevision

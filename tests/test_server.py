@@ -32,6 +32,7 @@ HEADERS = {
 PUBLIC_KEYS = {"id", "label", "email", "plan", "source", "machine_login",
                "five_hour", "seven_day", "limits", "state", "fetched_at", "expires_at",
                "provider", "as_of", "quota_source"}
+GEMINI_USAGE = json.loads('''{"conversation_id":"","status":"SUCCESS","response":"Gemini Models\\tWeekly Limit Remaining\\t99%\\t2026-12-01T10:15:06Z\\n...","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0},"command":{"name":"usage","data":{"description":"...","groups":[{"name":"Gemini Models","description":"Models within this group: Gemini 4 Neon, ...","buckets":[{"id":"gemini-weekly","name":"Weekly Limit Remaining","description":"...","window":"weekly","remaining_fraction":0.989983320236206,"reset_time":"2026-12-01T10:15:06Z"},{"id":"gemini-5h","name":"Five Hour Limit Remaining","description":"...","window":"5h","remaining_fraction":0.9899333119392395,"reset_time":"2026-11-24T15:15:06Z"}]},{"name":"Claude and GPT models","description":"Models within this group: Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B","buckets":[{"id":"3p-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":1,"reset_time":"2026-12-01T10:15:18Z"},{"id":"3p-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":1,"reset_time":"2026-11-24T15:15:18Z"}]}]}}}''')
 
 
 class Response(io.BytesIO):
@@ -49,6 +50,7 @@ class ServerTests(unittest.TestCase):
         self.directory.mkdir()
         self.envfile = self.home / "env"
         self.codex_env = self.home / "codex-env"
+        self.gemini_env = self.home / "gemini-env"
         self.enter(patch.dict(os.environ, {
             "CLAUDE_USAGE_ACCOUNTS_DIR": str(self.directory),
             "CLAUDE_USAGE_BRIDGE_ENV": str(self.envfile),
@@ -57,9 +59,13 @@ class ServerTests(unittest.TestCase):
             "CLAUDE_USAGE_CODEX_ENV": str(self.codex_env),
             "CLAUDE_USAGE_CODEX_BIN": str(self.home / "missing-codex"),
             "CLAUDE_USAGE_CODEX_SECONDS": "300",
+            "CLAUDE_USAGE_GEMINI_ENV": str(self.gemini_env),
+            "CLAUDE_USAGE_AGY": str(self.home / "missing-agy"),
+            "CLAUDE_USAGE_GEMINI_SECONDS": "600",
         }))
         self.enter(patch.object(Path, "home", return_value=self.home))
         self.keychain = self.enter(patch.object(server, "keychain_read", side_effect=server.SignedOut()))
+        self.real_run = subprocess.run
         self.subprocess = self.enter(patch.object(server.subprocess, "run", side_effect=AssertionError("real subprocess forbidden")))
         self.real_popen = subprocess.Popen
         self.popen = self.enter(patch.object(server.subprocess, "Popen", side_effect=AssertionError("real codex forbidden")))
@@ -143,6 +149,38 @@ class ServerTests(unittest.TestCase):
         path.write_text("#!" + sys.executable + "\n" + body)
         path.chmod(0o700)
         return patch.dict(os.environ, {"CLAUDE_USAGE_CODEX_BIN": str(path)})
+
+    def gemini(self, label="pho", token=True):
+        home = self.home / ("gemini-" + label)
+        home.mkdir(exist_ok=True)
+        self.gemini_env.write_text("GEMINI_BRIDGE_ACCOUNTS=" + label + ":" + str(home) + "\n")
+        if token:
+            path = home / ".gemini/antigravity-cli/antigravity-oauth-token"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("synthetic-gemini-token")
+        return server.gemini_registry()[0]
+
+    def fake_agy(self, result=None, exit_code=0):
+        path = self.home / "fake-agy"
+        marker = self.home / "agy-executed"
+        path.write_text("#!" + sys.executable + "\n" +
+                        "import os, sys\nfrom pathlib import Path\n" +
+                        "Path(" + repr(str(marker)) + ").write_text('executed')\n" +
+                        "assert sys.argv[1:] == ['-p', '/usage', '--output-format', 'json']\n" +
+                        "assert Path.cwd() == Path(os.environ['HOME']).resolve()\n" +
+                        "assert os.environ['AGY_CLI_FORCE_FILE_TOKEN_STORAGE'] == '1'\n" +
+                        "assert sys.stdin.read() == ''\n" +
+                        "print('https://fixture.invalid/oauth?secret=fixture-private')\n" +
+                        "print('fixture-private-stderr', file=sys.stderr)\n" +
+                        "print('[]')\n" +
+                        "print(" + repr(json.dumps(GEMINI_USAGE if result is None else result)) + ")\n" +
+                        "print('trailing non-json')\n" +
+                        "sys.exit(" + str(exit_code) + ")\n")
+        path.chmod(0o700)
+        self.enter(patch.dict(os.environ, {"CLAUDE_USAGE_AGY": str(path)}))
+        self.subprocess.side_effect = self.real_run
+        self.popen.side_effect = self.real_popen
+        return path
 
     def test_registry_order_from_bridge_env_then_alphabetical(self):
         for label in ("zebra", "mahidol", "kkpk", "pho", "apple"):
@@ -442,6 +480,255 @@ class ServerTests(unittest.TestCase):
         self.clock.return_value += 61
         self.request("POST", "/api/refresh?account=pho", headers)
         self.assertEqual(self.urlopen.call_count, 2)
+
+    def test_gemini_registry_order_quotes_homes_plan_ends_and_public_fields(self):
+        self.token("pho")
+        self.codex()
+        self.gemini_env.write_text(
+            '# logins\nexport GEMINI_BRIDGE_ACCOUNTS="pho:~/pho,apple:~,pho:/ignored,sk-ant-bad:/bad,:/empty,bad,empty:"\n'
+            "export GEMINI_BRIDGE_PLAN_ENDS='pho:2026-12-19,apple:2026-12-05'\n"
+            'GEMINI_BRIDGE_MANUAL_ACCOUNTS=apple\n')
+        accounts = server.account_registry()
+        self.assertEqual([a["id"] for a in accounts], ["pho", "codex-pro", "gemini-pho", "gemini-apple"])
+        self.assertEqual(accounts[2], {"id": "gemini-pho", "label": "pho", "provider": "gemini",
+                                      "source": "gemini", "machine_login": False, "expires_at": "2026-12-19",
+                                      "email": None, "plan": None, "_home": str(self.home / "pho")})
+        self.assertEqual(accounts[3]["_home"], str(self.home))
+        self.assertEqual(accounts[3]["expires_at"], "2026-12-05")
+        with patch.object(server, "fetch_registered_account", side_effect=lambda a: {"id": a["id"]}):
+            code, body = self.request("GET", "/api/accounts")
+        self.assertEqual(code, 200)
+        self.assertEqual([a["id"] for a in json.loads(body)["accounts"]], [a["id"] for a in accounts])
+
+    def test_gemini_registry_ignores_invalid_plan_dates_and_has_no_fallback(self):
+        self.assertEqual(server.gemini_registry(), [])
+        (self.home / ".gemini").mkdir()
+        self.gemini_env.write_text("GEMINI_BRIDGE_MANUAL_ACCOUNTS=pho\nGEMINI_BRIDGE_PLAN_ENDS=pho:2026-12-19\n")
+        self.assertEqual(server.gemini_registry(), [])
+        for date in ("2026-02-30", "2026-13-01", "2026-2-01", "20261219", "2026-12-19T00:00:00Z", "bad"):
+            with self.subTest(date=date):
+                self.gemini_env.write_text("GEMINI_BRIDGE_ACCOUNTS=pho:~/pho\nGEMINI_BRIDGE_PLAN_ENDS=pho:" + date + "\n")
+                self.assertIsNone(server.gemini_registry()[0]["expires_at"])
+        self.gemini_env.write_text("GEMINI_BRIDGE_ACCOUNTS=\n")
+        self.assertEqual(server.gemini_registry(), [])
+
+    def test_gemini_default_registry_and_binary_use_real_home(self):
+        default = self.home / ".config/gemini-bridge/env"
+        default.parent.mkdir(parents=True)
+        default.write_text("GEMINI_BRIDGE_ACCOUNTS=pho:~/pho\n")
+        with patch.dict(os.environ):
+            os.environ.pop("CLAUDE_USAGE_GEMINI_ENV", None)
+            self.assertEqual(server.gemini_registry()[0]["_home"], str(self.home / "pho"))
+        account = self.gemini()
+        binary = self.fake_agy()
+        default_binary = self.home / ".local/bin/agy"
+        default_binary.parent.mkdir(parents=True)
+        binary.rename(default_binary)
+        with patch.dict(os.environ):
+            os.environ.pop("CLAUDE_USAGE_AGY", None)
+            self.assertEqual(server.fetch_registered_account(account)["state"], "ok")
+        self.assertEqual(self.subprocess.call_args.args[0][0], str(default_binary))
+
+    def test_gemini_fake_agy_maps_live_snapshot_and_never_reads_token(self):
+        account = self.gemini()
+        self.fake_agy(exit_code=17)  # agy's exit status is not its auth/quota status.
+        with patch.object(Path, "read_text", side_effect=AssertionError("token contents forbidden")), \
+                patch.object(Path, "read_bytes", side_effect=AssertionError("token contents forbidden")):
+            result = server.fetch_registered_account(account)
+        self.assertEqual(set(result), PUBLIC_KEYS)
+        self.assertEqual(result["five_hour"], {"utilization": 1.0, "resets_at": "2026-11-24T15:15:06Z", "status": "allowed"})
+        self.assertEqual(result["seven_day"], {"utilization": 1.0, "resets_at": "2026-12-01T10:15:06Z", "status": "allowed"})
+        self.assertEqual(result["limits"], [
+            {"kind": "session", "percent": 1.0, "resets_at": "2026-11-24T15:15:06Z", "status": "allowed"},
+            {"kind": "weekly_all", "percent": 1.0, "resets_at": "2026-12-01T10:15:06Z", "status": "allowed"},
+            {"percent": 0, "resets_at": "2026-12-01T10:15:18Z", "status": "allowed",
+             "kind": "weekly_scoped", "group": "Claude and GPT models",
+             "scope": {"model": {"display_name": "Claude and GPT models"}}},
+        ])
+        self.assertEqual((result["provider"], result["fetched_at"], result["as_of"], result["quota_source"], result["state"]),
+                         ("gemini", 10000, 10000, "live", "ok"))
+        self.assertEqual(server.account_state(account)["identity"], ("gemini", account["_home"]))
+        self.assertEqual(self.subprocess.call_args.kwargs["timeout"], 45)
+        self.assertEqual(self.subprocess.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(self.subprocess.call_args.kwargs["env"]["HOME"], account["_home"])
+        self.assertEqual(self.subprocess.call_args.kwargs["cwd"], account["_home"])
+        self.assertNotIn("fixture-private", json.dumps(result))
+        self.assertNotIn("https://", json.dumps(result))
+        self.clock.return_value += 599
+        self.assertEqual(server.fetch_registered_account(account), result)
+        self.assertEqual(self.subprocess.call_count, 1)
+        self.clock.return_value += 1
+        self.assertEqual(server.fetch_registered_account(account)["state"], "ok")
+        self.assertEqual(self.subprocess.call_count, 2)
+
+    def test_gemini_accounts_keep_independent_snapshots(self):
+        pho = self.gemini()
+        self.fake_agy()
+        server.fetch_registered_account(pho)
+        apple = self.gemini("apple")
+        data = json.loads(json.dumps(GEMINI_USAGE))
+        data["command"]["data"]["groups"][0]["buckets"][0]["remaining_fraction"] = 0.75
+        self.fake_agy(data)
+        server.fetch_registered_account(apple)
+        self.gemini_env.write_text("GEMINI_BRIDGE_ACCOUNTS=pho:" + pho["_home"] + ",apple:" + apple["_home"] + "\n")
+        code, body = self.request("GET", "/api/accounts")
+        self.assertEqual(code, 200)
+        accounts = json.loads(body)["accounts"]
+        self.assertEqual([a["id"] for a in accounts], ["gemini-pho", "gemini-apple"])
+        self.assertEqual([a["seven_day"]["utilization"] for a in accounts], [1, 25])
+        for account in accounts:
+            self.assertEqual([limit["kind"] for limit in account["limits"]], ["session", "weekly_all", "weekly_scoped"])
+        self.assertEqual(self.subprocess.call_count, 2)
+
+    def test_gemini_limits_order_is_independent_of_group_order_and_missing_windows(self):
+        data = json.loads(json.dumps(GEMINI_USAGE))
+        groups = data["command"]["data"]["groups"]
+        groups.reverse()
+        result = server.gemini_live_snapshot(data)
+        self.assertEqual([limit["kind"] for limit in result["limits"]], ["session", "weekly_all", "weekly_scoped"])
+        groups[1]["buckets"] = [groups[1]["buckets"][0]]  # Only the Gemini weekly window is reported.
+        result = server.gemini_live_snapshot(data)
+        self.assertIsNone(result["five_hour"])
+        self.assertEqual([limit["kind"] for limit in result["limits"]], ["weekly_all", "weekly_scoped"])
+        self.assertEqual(result["limits"][0]["percent"], result["seven_day"]["utilization"])
+
+    def test_gemini_missing_or_empty_token_never_executes_agy(self):
+        account = self.gemini(token=False)
+        self.fake_agy()
+        self.assertEqual(server.fetch_registered_account(account)["state"], "token_rejected")
+        token = Path(account["_home"]) / ".gemini/antigravity-cli/antigravity-oauth-token"
+        token.parent.mkdir(parents=True)
+        token.touch()
+        self.clock.return_value += 301
+        self.assertEqual(server.fetch_registered_account(account)["state"], "token_rejected")
+        self.assertFalse((self.home / "agy-executed").exists())
+        self.subprocess.assert_not_called()
+        self.popen.assert_not_called()
+
+    def test_gemini_auth_failure_clears_snapshot_and_backs_off(self):
+        account = self.gemini()
+        self.fake_agy()
+        self.assertEqual(server.fetch_registered_account(account)["state"], "ok")
+        self.clock.return_value += 600
+        self.fake_agy({"status": "ERROR", "error": "Authentication failed or timed out https://fixture.invalid/oauth"})
+        code, body = self.request("GET", "/api/accounts")
+        self.assertEqual(code, 200)
+        result = json.loads(body)["accounts"][0]
+        self.assertEqual(result["state"], "token_rejected")
+        self.assertIsNone(result["five_hour"])
+        self.assertIsNone(result["as_of"])
+        self.assertNotIn(b"https://", body)
+        self.assertNotIn(b"fixture-private", body)
+        self.assertEqual(server.account_state(account)["next_at"], self.clock.return_value + 300)
+        calls = self.subprocess.call_count
+        self.clock.return_value += 299
+        server.fetch_registered_account(account, force=True)
+        self.assertEqual(self.subprocess.call_count, calls)
+        self.clock.return_value += 1
+        server.fetch_registered_account(account)
+        self.assertEqual(self.subprocess.call_count, calls + 1)
+
+    def test_gemini_past_resets_expire_live_and_cached_windows_and_scoped_limits(self):
+        account = self.gemini()
+        data = json.loads(json.dumps(GEMINI_USAGE))
+        for group in data["command"]["data"]["groups"]:
+            for bucket in group["buckets"]:
+                bucket.update(remaining_fraction=0, reset_time="1970-01-01T02:46:41Z")
+        self.fake_agy(data)
+        result = server.fetch_registered_account(account)
+        self.assertEqual(result["five_hour"]["status"], "rejected")
+        self.assertEqual([limit["kind"] for limit in result["limits"]], ["session", "weekly_all", "weekly_scoped"])
+        for limit in result["limits"]:
+            self.assertEqual((limit["percent"], limit["status"]), (100, "rejected"))
+        self.clock.return_value += 2
+        expired = server.fetch_registered_account(account)
+        for window in [expired["five_hour"], expired["seven_day"]] + expired["limits"]:
+            self.assertEqual((window.get("utilization", window.get("percent")), window["resets_at"], window["status"]),
+                             (0, None, "allowed"))
+        self.assertEqual(self.subprocess.call_count, 1)
+        self.clock.return_value += 600
+        refreshed = server.fetch_registered_account(account)
+        self.assertEqual(refreshed["five_hour"]["utilization"], 0)
+        for limit in refreshed["limits"]:
+            self.assertEqual((limit["percent"], limit["resets_at"], limit["status"]), (0, None, "allowed"))
+
+    def test_gemini_interval_minimum_default_and_invalid_configuration(self):
+        account = self.gemini()
+        self.fake_agy()
+        with patch.dict(os.environ, {"CLAUDE_USAGE_GEMINI_SECONDS": "1"}):
+            self.assertEqual(server.gemini_seconds(), 120)
+            server.fetch_registered_account(account)
+            self.clock.return_value += 119
+            server.fetch_registered_account(account)
+            self.assertEqual(self.subprocess.call_count, 1)
+            self.clock.return_value += 1
+            server.fetch_registered_account(account)
+            self.assertEqual(self.subprocess.call_count, 2)
+        with patch.dict(os.environ, {"CLAUDE_USAGE_GEMINI_SECONDS": "bad"}):
+            self.assertEqual(server.gemini_seconds(), 600)
+        with patch.dict(os.environ):
+            os.environ.pop("CLAUDE_USAGE_GEMINI_SECONDS", None)
+            self.assertEqual(server.gemini_seconds(), 600)
+
+    def test_gemini_failures_are_generic_and_preserve_only_old_snapshot(self):
+        account = self.gemini()
+        for failure in (FileNotFoundError("private-binary"), subprocess.TimeoutExpired("private-output", 45),
+                        subprocess.CompletedProcess([], 0, "not-json https://fixture.invalid", "private-stderr"),
+                        subprocess.CompletedProcess([], 0, '{"status":"ERROR","error":"private-failure"}', ""),
+                        subprocess.CompletedProcess([], 0, '{"status":"SUCCESS"}', "")):
+            for cached in (False, True):
+                with self.subTest(failure=type(failure).__name__, cached=cached):
+                    server._account_states.clear()
+                    if cached:
+                        self.fake_agy()
+                        good = server.fetch_registered_account(account)
+                        self.clock.return_value += 600
+                    if isinstance(failure, Exception):
+                        self.subprocess.side_effect = failure
+                    else:
+                        self.subprocess.side_effect = None
+                        self.subprocess.return_value = failure
+                    result = server.fetch_registered_account(account)
+                    self.assertEqual(result["state"], "stale" if cached else "error")
+                    self.assertNotIn("private", json.dumps(result))
+                    self.assertNotIn("https://", json.dumps(result))
+                    self.assertEqual(server.account_state(account)["next_at"], self.clock.return_value + 300)
+                    if cached:
+                        self.assertEqual(result["five_hour"], good["five_hour"])
+                    calls = self.subprocess.call_count
+                    self.clock.return_value += 299
+                    server.fetch_registered_account(account, force=True)
+                    self.assertEqual(self.subprocess.call_count, calls)
+
+    def test_gemini_group_selection_validation_clamping_and_home_identity(self):
+        data = json.loads(json.dumps(GEMINI_USAGE))
+        group = data["command"]["data"]["groups"][0]
+        group["name"] = "Renamed group"
+        group["buckets"][0]["remaining_fraction"] = -0.1
+        group["buckets"][1]["remaining_fraction"] = 1.1
+        result = server.gemini_live_snapshot(data)
+        self.assertEqual(result["seven_day"]["utilization"], 100)
+        self.assertEqual(result["seven_day"]["status"], "rejected")
+        self.assertEqual(result["five_hour"]["utilization"], 0)
+        group.pop("name")
+        self.assertIsNotNone(server.gemini_live_snapshot(data)["five_hour"])
+        group["name"] = "Gemini Models"
+        for bucket in group["buckets"]:
+            bucket["id"] = "future-bucket"
+        self.assertIsNotNone(server.gemini_live_snapshot(data)["five_hour"])
+        for value in (True, None, "nan", "inf", "bad"):
+            group["buckets"][1]["remaining_fraction"] = value
+            self.assertIsNone(server.gemini_live_snapshot(data)["five_hour"])
+        account = self.gemini()
+        self.fake_agy()
+        server.fetch_registered_account(account)
+        other = self.home / "other-gemini-home"
+        other.mkdir()
+        account["_home"] = str(other)
+        result = server.fetch_registered_account(account)
+        self.assertEqual(result["state"], "token_rejected")
+        self.assertIsNone(result["five_hour"])
+        self.assertEqual(server.account_state(account)["identity"], ("gemini", str(other)))
 
     def test_codex_registry_order_quotes_homes_and_public_fields(self):
         self.token("pho")
@@ -763,7 +1050,7 @@ def send(value):
     print(json.dumps(value), flush=True)
 initialize = receive()
 assert initialize == {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-    "clientInfo": {"name": "claude-usage-widget", "version": "3.2.0"}}}
+    "clientInfo": {"name": "claude-usage-widget", "version": "3.3.0"}}}
 send({"method": "configWarning", "params": {}})
 send({"id": 1, "result": {}})
 assert receive() == {"jsonrpc": "2.0", "method": "initialized"}
@@ -855,7 +1142,7 @@ sys.stdin.read()
         with patch.object(server, "fetch_usage", return_value=usage), patch.object(server, "fetch_account", return_value={"logged_in": False}):
             self.assertEqual(json.loads(self.request("GET", "/api/usage")[1]), usage)
             self.assertEqual(json.loads(self.request("GET", "/api/account")[1]), {"logged_in": False})
-        self.assertEqual(self.request("GET", "/api/ping"), (200, b'{"ok":true,"version":"3.2.0"}'))
+        self.assertEqual(self.request("GET", "/api/ping"), (200, b'{"ok":true,"version":"3.3.0"}'))
         for path in ("/", "/index.html"):
             code, body = self.request("GET", path)
             self.assertEqual(code, 200)

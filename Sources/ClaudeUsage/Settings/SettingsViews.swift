@@ -283,14 +283,14 @@ private struct AccountSettingsRow: View {
     }
     private var suggestions: [String] {
         var values = [account.label, account.label.uppercased(), String(account.label.prefix(2)).uppercased()]
-        if account.isCodex { values.append("›" + account.label.uppercased()) }
+        if account.isBridgeAccount { values.append(account.provider.tagPrefix + account.label.uppercased()) }
         return values
     }
     private var status: String {
         switch account.state {
         case .ok: String(localized: "Up to date")
         case .stale: String(localized: "Stale")
-        case .tokenRejected: String(localized: "Sign-in expired")
+        case .tokenRejected: MenuFormatting.rejectedAccountText(account.provider)
         case .error: String(localized: "Error")
         }
     }
@@ -307,6 +307,7 @@ private struct AccountSettingsRow: View {
         let label = account.label
         let safe = !label.isEmpty && label.unicodeScalars.allSatisfy { CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-").contains($0) }
         let argument = safe ? label : "'" + label.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        if account.provider == .gemini { return "bridge-accounts/gemini-accounts.sh login " + argument }
         return "scripts/add-account.sh " + argument
     }
     var body: some View {
@@ -317,6 +318,9 @@ private struct AccountSettingsRow: View {
                     Text(verbatim: account.label).fontWeight(.semibold).lineLimit(1)
                     Text(verbatim: account.email ?? "").font(.caption).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
+                    if account.provider == .gemini, let date = account.expiresAt {
+                        Text("Plan ends \(date)").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer(minLength: 4)
                 HStack(spacing: 4) {
